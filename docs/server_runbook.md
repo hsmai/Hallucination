@@ -219,9 +219,13 @@ git commit -m "S3/S4: D1 테이블 + D3 마이닝 목록 (최종)" && git push
 
 ## 트러블슈팅
 
-**T1. Qwen OOM (3090 Ti 24GB)**
+**T1. Qwen OOM (3090 Ti 24GB)** — 상황 확인 후 **한 가지 방향만** 구현한다 (사전 대응책 다중 구현 금지 — 2026-07-15 사용자 지시):
 ① `nvidia-smi`로 로드 직후/추론 중 사용량 확인 ② 짧은 비디오 샘플로 재시도해 경계 확인
-③ `src/adapters/qwen_omni.py`의 from_pretrained에 `device_map="auto", max_memory={0:"22GiB","cpu":"64GiB"}` 로 CPU offload (수치 동일, 속도 저하) ④ 양자화는 금지 (비교 공정성)
+③ 1순위 수정: **thinker-only 로드** (`Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained`로 교체
+   — talker 가중치를 GPU에 안 올려 ~22GB→~17GB, 텍스트 경로 동일이라 수치 무영향.
+   `src/adapters/qwen_omni.py` 로드부 + base의 generate 호출부 수정, 대응 테스트 갱신)
+④ 그래도 부족하면: `device_map="auto", max_memory={0:"22GiB","cpu":"64GiB"}` CPU offload (수치 동일, 속도 저하)
+⑤ 양자화는 금지 (비교 공정성)
 
 **T2. conda 복제 실패** → S1-3 fallback (export → 신규 생성). pip 전용 패키지 누락 주의
 (특히 qwen env의 `qwen-omni-utils`, vl env의 videollama2 의존성).
