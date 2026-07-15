@@ -175,18 +175,20 @@ class MockAdapter(ModelAdapter):
 
 # ---------------------------------------------------------------- 로더
 
-def load_adapter(model_key: str, cfg, dry_run: bool) -> ModelAdapter:
-    """model_key: unified_settings.yaml models.* 키 (videollama2_av | qwen2_5_omni_7b)."""
+def load_adapter(model_key: str, cfg, dry_run: bool, method: str = "base") -> ModelAdapter:
+    """model_key: unified_settings.yaml models.* 키 (videollama2_av | qwen2_5_omni_7b).
+
+    method가 필요한 이유: VideoLLaMA2×AVCD는 공식 fork 백엔드(third_party/AVCD)를,
+    그 외는 vanilla(third_party/VideoLLaMA2)를 로드한다 (fork들이 패키지명을 공유하므로
+    run당 1프로세스에서 하나만 import 가능 — src/adapters/videollama2_av.py 참조).
+    """
     if model_key not in cfg.get("models"):
         raise ValueError(f"알 수 없는 모델 키: {model_key!r} (yaml models.* 참조)")
     if dry_run:
         return MockAdapter(model_key, seed=cfg.get("experiment.seed"))
-    # 실제 어댑터는 L4에서 구현 (서버 전용). 로컬에서 실모델 로드는 제약 위반.
-    try:
-        from .adapters import REAL_ADAPTERS  # L4에서 생성
-    except ImportError as e:
+    if not torch.cuda.is_available():
         raise RuntimeError(
-            "실모델 어댑터가 아직 없습니다 (Phase L4에서 구현). "
-            "로컬에서는 --dry-run만 사용하세요."
-        ) from e
-    return REAL_ADAPTERS[model_key](cfg)
+            "실모델 실행은 GPU 서버 전용입니다 (CLAUDE.md 제약 1). "
+            "로컬에서는 --dry-run을 사용하세요.")
+    from .adapters import REAL_ADAPTERS
+    return REAL_ADAPTERS[model_key](cfg, method)

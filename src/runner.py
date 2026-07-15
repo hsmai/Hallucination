@@ -115,7 +115,7 @@ def run(args) -> int:
         else:
             cfg._resolved["decoding"]["max_new_tokens"][args.benchmark] = args.max_new_tokens
 
-    adapter = load_adapter(args.model, cfg, dry_run=args.dry_run)
+    adapter = load_adapter(args.model, cfg, dry_run=args.dry_run, method=args.method)
     method = get_method(args.method)
     method.setup(adapter, cfg, args.benchmark)
 

@@ -119,6 +119,9 @@ methods:
     plausibility_beta_paper: 0.1               # 논문 모드용
     implausible_fill: -1.0e-4                  # ⚠ 코드 그대로(-inf 아님). faithful 재현용
     faithful_mode: true                        # true: 코드 특이점 그대로 / false: 논문 서술 기준(-inf, β=0.1)
+    videollama2_backend: official_fork         # AVCD×VideoLLaMA2는 공식 fork(third_party/AVCD) 사용
+    videollama2_dtype: float16                 # ⚠ fork 내부 fp16 캐스팅 하드코딩 → 이 run만 fp16
+                                               #   (bf16 통일 원칙의 유일한 예외 — 게이트에서 영향 확인)
 
 scoring:
   scorer:
