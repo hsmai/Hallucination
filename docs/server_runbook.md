@@ -218,6 +218,14 @@ git commit -m "S3/S4: D1 테이블 + D3 마이닝 목록 (최종)" && git push
 
 납품 체크: ☐ D1 테이블 ☐ D2 JSONL(서버 보관, 경로 공유) ☐ D3 마이닝+패키징 ☐ D4 manifest(*.meta.json)·latency(JSONL의 inference_time_s 집계)·env 스냅샷
 
+**선배 합의·보고 항목 (납품 시):**
+- ☐ **latency 표 처리 방식 합의** — 정확도와 달리 latency는 GPU 의존. 비교군은 3090, OURS는 A100이므로
+  절대값을 한 표에 놓지 말 것. (a) "동일 GPU 내 상대 비교"로만 제시 (비교군 4종 = 3090 수치, 전 방법
+  eager 통일 조건 명시 — blueprint D4) 또는 (b) OURS만 3090에서 latency 재측정. 둘 중 택일 합의
+- ☐ **하드웨어 동등성 근거 전달** — S2의 Base(3090) ≈ Ours(Base)(A100) 게이트 결과가
+  "GPU 차이가 정확도에 무영향"의 실증 증거 → 게이트 로그와 함께 보고
+- ☐ OOM 등으로 제외된 샘플이 있으면 건수·목록 명시 (0건 목표)
+
 ---
 
 ## 트러블슈팅
