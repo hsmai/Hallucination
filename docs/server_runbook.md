@@ -1,6 +1,6 @@
 # 서버 Runbook — 계정 발급 당일 위에서부터 순서대로 실행
 
-> 대상: A100 80GB / RTX A6000 48GB / RTX 3090 Ti 24GB (§S1-2에서 분기).
+> 대상 GPU: **RTX 3090 24GB가 유력** (2026-07-15 기준 — A100/A6000/3090Ti 가능성 희박). §S1-2에서 실물 확인 후 분기.
 > 전제: `/home3/t202401082/.conda/envs/{qwen-omni,videollama2}` 와 `/home3/t202401082/omni-steering` 읽기 권한.
 > 권한 없으면 선배에게 chmod/그룹 요청 후 진행 (blueprint §9-1).
 > 표기: ☐ = 확인 후 체크. 명령은 그대로 복붙 가능하도록 작성.
@@ -23,8 +23,11 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv | tee logs/
 
 | 기종 | 판정 | 조치 |
 |---|---|---|
-| A100 80GB / A6000 48GB | ☐ 그대로 진행 | 없음 (A6000은 MAD 논문과 동일 계열 — 속도만 A100 대비 ~2배) |
-| **3090 Ti 24GB** | ☐ Qwen OOM 주의 | 스모크에서 Qwen 조합 OOM 시 → §트러블슈팅 T1 (offload). VideoLLaMA2는 영향 없음 |
+| **RTX 3090 24GB (유력)** | ☐ Qwen OOM 주의 | VideoLLaMA2 8 runs는 안전(~17-19GB). Qwen은 로드부터 경계선(~22GB) → 스모크에서 OOM 시 §트러블슈팅 T1 (1순위: thinker-only 로드). bf16·eager 모두 지원(Ampere) — 수치 영향 없음 |
+| A100 80GB / A6000 48GB (희박) | ☐ 그대로 진행 | 없음 |
+
+3090 예상 소요: A100 대비 ~2.5~3배 (16 run 전체 ≈ 40~50 GPU시간 ≈ 2~3일 야간 배치).
+→ run_full.sh의 우선순위(P1 AVHBench → P2 CMM base/MAD/AVCD → P3 CMM VCD-ext)가 이 상황용.
 
 ## S1-3. conda env 복제 (+ 스냅샷 커밋)
 
@@ -145,7 +148,7 @@ bash scripts/run_smoke.sh 5 2>&1 | tee logs/smoke.log
 ```
 
 ☐ 16조합 전부 OK
-☐ 각 로그 말미 VRAM 사용량 기록 (3090 Ti면 Qwen 조합 주시)
+☐ 각 로그 말미 VRAM 사용량 기록 (3090이면 Qwen 조합 주시 — 22GB 초과 시 T1 선제 적용)
 ☐ 샘플당 처리 시간으로 소요시간표 계산:
    `전체 시간 ≈ Σ (방법별 s/sample × 샘플수)` — AVHBench 3,419 / CMM 1,200 기준.
    결과를 `docs/time_estimate.md`로 커밋하고 S3 야간 배치 계획 수립
@@ -219,7 +222,7 @@ git commit -m "S3/S4: D1 테이블 + D3 마이닝 목록 (최종)" && git push
 
 ## 트러블슈팅
 
-**T1. Qwen OOM (3090 Ti 24GB)** — 상황 확인 후 **한 가지 방향만** 구현한다 (사전 대응책 다중 구현 금지 — 2026-07-15 사용자 지시):
+**T1. Qwen OOM (RTX 3090 24GB)** — 상황 확인 후 **한 가지 방향만** 구현한다 (사전 대응책 다중 구현 금지 — 2026-07-15 사용자 지시):
 ① `nvidia-smi`로 로드 직후/추론 중 사용량 확인 ② 짧은 비디오 샘플로 재시도해 경계 확인
 ③ 1순위 수정: **thinker-only 로드** (`Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained`로 교체
    — talker 가중치를 GPU에 안 올려 ~22GB→~17GB, 텍스트 경로 동일이라 수치 무영향.

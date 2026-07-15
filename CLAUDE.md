@@ -6,7 +6,7 @@
 ## 제약
 
 1. **로컬 = macOS(Apple Silicon), GPU 없음.** 7B 모델 로드/forward 금지. CUDA 전용 패키지(flash-attn 등) 설치 시도 금지. 개발·검증은 CPU + 소형 더미 텐서 + MockModel dry-run으로만 한다.
-2. **서버 계정 발급 대기 중.** 서버(A100 80GB×1)에는 이미 다음이 존재한다:
+2. **서버 계정 발급 대기 중.** GPU는 **RTX 3090 24GB가 유력** (2026-07-15 갱신 — 당초 A100 80GB에서 변경, A6000/3090Ti 가능성 희박. Qwen 조합 VRAM 경계선 → runbook T1). 서버에는 이미 다음이 존재한다:
    - conda 환경 2종: `/home3/t202401082/.conda/envs/qwen-omni`, `/home3/t202401082/.conda/envs/videollama2` → 발급 후 복제해서 사용
    - OURS 코드+데이터셋: `/home3/t202401082/omni-steering` → 발급 후 직접 참조
    따라서 **로컬에서 conda env 구축, 모델 가중치 다운로드, 미디어 데이터 다운로드를 하지 않는다.** 서버 작업은 runbook 문서로만 준비한다. 벤치마크 QA json(경량)만 로컬로 받는다.
