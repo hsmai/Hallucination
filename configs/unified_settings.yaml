@@ -57,7 +57,8 @@ benchmarks:
     split:
       status: UNKNOWN_pending_server
       temp_default: full_qa_excluding_av_tasks # MAD 방식: QA.json에서 task에 'AV' 포함 제외 (3,426)
-      # 대안: avcd_val(205) / avcd_test(5302) — third_party/AVCD/json/
+      # 근거: Ours(Base)≈MAD 논문 Base 수치 일치 (paper_settings.md §4) → MAD 프로토콜 유력
+      # avcd_val(205)/avcd_test(5302)는 AVCD 논문 수치(81.95/72.15) 대조 시에만 사용
     tasks_for_overall:                          # MAD score.py 기준
       - Video-driven Audio Hallucination
       - Audio-driven Video Hallucination
@@ -65,8 +66,8 @@ benchmarks:
     qa_json: data/qa/cmm_qa.json
     categories:
       status: UNKNOWN_pending_server
-      temp_default: all                        # ⚠ MAD repo 스크립트 default는 over-reliance만.
-                                               #   지표(Visual/Audio/Language Dominance)는 전체 필요 추정
+      temp_default: over-reliance_unimodal_priors  # 논문 지표가 V/A/L Dominance = 이 카테고리의
+                                                   # sub_category (docs/paper_settings.md §5). L2에서 데이터 검증
     audio_from_video_stem: true                # audio = video 경로의 .mp4→.wav
 
 prompts:
@@ -87,14 +88,13 @@ methods:
   base: {}                                     # 원본 greedy 디코딩
 
   vcd_ext:
-    # MAD repo mm_default_cd 계수: [1+3γ, -γ, -γ, -γ] over [VA, V, A, T]  (확정: Eq.10 형식)
-    gamma:
-      status: UNKNOWN_pending_server
-      temp_default: 0.5                        # mm_default_cd default. 논문 대응값 서버에서 확인
-    branch_mode:
-      status: UNKNOWN_pending_server
-      temp_default: modality_ablation          # MAD식. 대안: diffusion_noise (AVCD __init__VCD.py식)
-    noise_step: 500                            # branch_mode=diffusion_noise일 때만 사용
+    # MAD 논문 Eq.10 계수: [1+3α, -α, -α, -α] over [VA, V, A, T]  (확정)
+    alpha:
+      status: UNKNOWN_pending_server           # 논문·코드 모두 값 미명시 (mm_default_cd default 0.5)
+      temp_default: 0.5
+      gate_candidates: [0.5, 2.5]              # 게이트에서 MAD 논문 Table 1 VCD-ext 행과 대조하여 확정
+    branch_mode: modality_ablation             # 확정 — MAD 논문 Eq.7의 ˜ = modality 제거 (paper_settings.md §1)
+                                               # (diffusion_noise는 AVCD repo VCD 전용, 우리 비교군 정의 아님)
 
   mad:
     gamma: 2.5                                 # 확정 (논문·batch sh)
@@ -112,9 +112,9 @@ methods:
     masking_top_p: 0.5                         # 확정 (논문 P=50%, 코드 quantile 0.5)
     exclude_last_layer: true                   # 확정 — 마스킹·dominance 모두 마지막 layer 제외
     ead_tau: 0.6                               # 확정 (논문·코드 일치)
-    plausibility_beta: 0.2                     # ⚠ 코드값(작업 원칙: 코드 우선). 논문/blueprint는 0.1
-                                               #   → 보고 완료, 서버 게이트에서 재검토
-    plausibility_beta_paper: 0.1               # 대조 실험용
+    plausibility_beta: 0.2                     # ⚠ 코드값. 논문 Supp.B는 β=0.1 + −inf fill (paper_settings.md §2)
+                                               #   → 게이트에서 AVH val 81.95 재현되는 쪽으로 확정
+    plausibility_beta_paper: 0.1               # 논문 모드용
     implausible_fill: -1.0e-4                  # ⚠ 코드 그대로(-inf 아님). faithful 재현용
     faithful_mode: true                        # true: 코드 특이점 그대로 / false: 논문 서술 기준(-inf, β=0.1)
 
@@ -124,6 +124,28 @@ scoring:
     temp_default: mad_score                    # MAD repo score.py 로직 이식본 (src/score.py)
   yes_before_no: true                          # MAD extract_answer: yes 패턴 우선
   dedup_key: [video_id, question]
+
+# 게이트 검증 목표치 (run_gate.sh에서 대조. 출처: docs/paper_settings.md)
+gate_targets:
+  tolerance_pp: 2.0                            # 논문 재현 허용 오차 ±2%p (blueprint S2)
+  # 선배 완료 실험 — Base 정합성의 1차 기준 (Experiments.pdf 하단 표 / 슬라이드 p45)
+  ours_base:
+    videollama2_av: {cmm_overall: [73.6, 74.0], avh_overall: 77.4}   # CMM은 두 버전 존재
+    qwen2_5_omni_7b: {cmm_overall: 73.1, avh_overall: 76.8}
+  # MAD 논문 Table 1 (전 비교군 재현 목표, CMM V/A/L/Overall, AVH VdAH/AdVH/Overall)
+  mad_paper_table1:
+    videollama2_av:
+      base:    {cmm: [71.8, 80.0, 68.8, 73.5], avh: [75.7, 79.0, 77.4]}
+      vcd_ext: {cmm: [71.3, 83.3, 74.8, 76.4], avh: [66.0, 74.8, 70.4]}
+      avcd:    {cmm: [71.8, 84.0, 71.5, 75.8], avh: [78.3, 80.3, 79.3]}
+      mad:     {cmm: [82.3, 84.3, 77.5, 81.3], avh: [79.7, 79.1, 79.4]}
+    qwen2_5_omni_7b:
+      base:    {cmm: [64.5, 72.3, 81.3, 72.7], avh: [73.0, 80.7, 76.9]}
+      vcd_ext: {cmm: [62.5, 71.3, 84.5, 72.8], avh: [70.3, 77.1, 73.7]}
+      avcd:    {cmm: [66.3, 72.8, 81.0, 73.3], avh: [75.8, 79.7, 77.8]}
+      mad:     {cmm: [76.8, 84.3, 83.3, 81.4], avh: [78.7, 84.4, 81.6]}
+  # AVCD 논문 자체 수치 (split 판정용, VideoLLaMA2·AVHBench)
+  avcd_paper: {avh_full_test: 72.15, avh_val: 81.95}
 
 output:
   # D2 스키마 (blueprint) — per-sample JSONL
