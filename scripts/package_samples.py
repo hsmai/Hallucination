@@ -74,7 +74,15 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=30, help="상위 N개 후보만 (csv는 이미 강한 순 정렬)")
     ap.add_argument("--frames", type=int, default=6, help="샘플당 프레임 수 (4~8)")
     ap.add_argument("--benchmark", default="avhbench", choices=("avhbench", "cmm"))
+    ap.add_argument("--qa-json", default="data/qa/avhbench_qa.json",
+                    help="AV Captioning GT 조회용 (그림의 Sound/Video 설명 주석 재료, avhbench만)")
     args = ap.parse_args()
+
+    # 장면+소리 설명 GT (MAD 그림의 'Sound:/Video:' 주석 역할, 커버리지 ~79%)
+    captions = {}
+    if args.benchmark == "avhbench" and Path(args.qa_json).exists():
+        qa = json.loads(Path(args.qa_json).read_text())
+        captions = {x["video_id"]: x["label"] for x in qa if x.get("task") == "AV Captioning"}
 
     ffmpeg = check_ffmpeg()
     media = Path(args.media_dir)
@@ -105,9 +113,11 @@ def main() -> int:
         else:
             print(f"경고: 비디오 없음 — {vid} (프레임 생략)", file=sys.stderr)
 
+        r["scene_description_gt"] = captions.get(vid, "")
         (folder / "sample.json").write_text(json.dumps(r, indent=2, ensure_ascii=False))
         (folder / "answers.txt").write_text(
-            f"Q: {r['question']}\nGT: {r['ground_truth']}\n\n"
+            (f"장면 설명(GT 캡션): {r['scene_description_gt']}\n\n" if r["scene_description_gt"] else "")
+            + f"Q: {r['question']}\nGT: {r['ground_truth']}\n\n"
             f"Base   : {r.get('base_pred','')}  (correct={r.get('base_correct','')})\n"
             f"VCD-ext: {r.get('vcd_ext_pred','')}  (correct={r.get('vcd_ext_correct','')})\n"
             f"MAD    : {r.get('mad_pred','')}  (오답)\n"
