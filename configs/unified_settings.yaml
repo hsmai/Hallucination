@@ -54,6 +54,8 @@ paths:
 benchmarks:
   avhbench:
     qa_json: data/qa/avhbench_qa.json          # 로컬 확보본. 서버에서 OURS 내부 파일로 교체 가능
+    val_json: data/qa/avhbench_val.json        # AVCD 논문 validation (205) — 논문 수치 대조용
+    test_json: data/qa/avhbench_test.json      # AVCD 논문 test (5,302) — 〃
     split:
       status: UNKNOWN_pending_server
       temp_default: full_qa_excluding_av_tasks # MAD 방식: QA.json에서 task에 'AV' 포함 제외 (3,426)
