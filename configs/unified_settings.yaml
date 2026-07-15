@@ -130,6 +130,14 @@ scoring:
   yes_before_no: true                          # MAD extract_answer: yes 패턴 우선
   dedup_key: [video_id, question]
 
+# 실행 중 모니터링 (러너 체크포인트 — 수치 산출과 무관, 로그·별도 파일만)
+monitoring:
+  enabled: true
+  checkpoints: [0.25, 0.5, 0.75, 1.0]          # 전체의 1/4 지점마다 체크포인트 블록
+  probe_prompt: "Please describe what you can hear and see in detail."  # MAD Fig.9-10 문구 그대로
+  probe_max_new_tokens: 256                     # 논문 미명시 — repo 생성 루프 기본값 계열
+  probe_frames: 2                               # 체크포인트 샘플 프레임 저장 수 (ffmpeg 있을 때)
+
 # 게이트 검증 목표치 (run_gate.sh에서 대조. 출처: docs/paper_settings.md)
 gate_targets:
   tolerance_pp: 2.0                            # 논문 재현 허용 오차 ±2%p (blueprint S2)

@@ -106,6 +106,39 @@ class TestRunnerPipeline:
         assert "config_pending" in meta[0]
 
 
+class TestMonitoring:
+    """체크포인트 모니터링 (2026-07-15 지시) — 본 실험 데이터 불변 + 아티팩트 생성."""
+
+    def test_checkpoints_fire_and_do_not_pollute_jsonl(self, tmp_cfg, tmp_path, monkeypatch):
+        monkeypatch.chdir(REPO)
+        assert run_cli(["--model", "videollama2_av", "--method", "avcd", "--benchmark",
+                        "avhbench", "--dry-run", "--limit", "8", "--config", str(tmp_cfg)]) == 0
+        out = tmp_path / "results" / "dryrun" / "avhbench" / "videollama2_av__avcd.jsonl"
+        lines = out.read_text().strip().splitlines()
+        assert len(lines) == 8                       # 프로브가 본 JSONL에 안 섞임
+        assert all(set(json.loads(l).keys()) == D2_FIELDS for l in lines)
+
+        ckpt_root = out.parent / "checkpoints" / "videollama2_av__avcd"
+        dirs = sorted(ckpt_root.glob("ckpt*"))
+        assert len(dirs) == 4                        # 1/4 지점 4회 (8샘플 → 2,4,6,8)
+        insp = json.loads((dirs[0] / "inspection.json").read_text())
+        assert insp["probe_prompt"].startswith("Please describe")
+        assert isinstance(insp["probe_output"], str)  # 서술 프로브 전체 출력 저장됨
+        assert "scene_caption_gt" in insp
+
+    def test_monitor_seeds_from_resume(self, tmp_cfg, tmp_path, monkeypatch, caplog):
+        import logging as _l
+        monkeypatch.chdir(REPO)
+        args = ["--model", "videollama2_av", "--method", "base", "--benchmark", "cmm",
+                "--dry-run", "--config", str(tmp_cfg), "--log-interval", "2"]
+        run_cli(args + ["--limit", "4"])
+        with caplog.at_level(_l.INFO, logger="runner"):
+            run_cli(args + ["--limit", "8"])         # 재개: 4 skip + 4 처리
+        # 재개 후 첫 상태 로그의 누적 n이 기존분 포함(>4)이어야 함
+        one = [r.message for r in caplog.records if "누적acc" in r.message]
+        assert one and "(n=6)" in one[0]             # 4(기존) + 2(신규 interval)
+
+
 class TestOverrides:
     """--set 오버라이드 (게이트 α그리드/β판정의 기반)."""
 
