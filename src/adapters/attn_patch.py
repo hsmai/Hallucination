@@ -91,22 +91,34 @@ def _wrapped_eager(orig_fn):
     return eager_with_avcd
 
 
+def install_patch(modeling_module, layer_self_attns) -> AVCDPatchContext:
+    """임의의 transformers modeling 모듈에 패치 설치 (테스트 가능한 공통 진입점).
+
+    modeling_module: eager_attention_forward를 가진 모듈 객체
+    layer_self_attns: 패치 대상 decoder layer들의 self_attn 모듈 리스트 (순서 = layer_idx 순)
+    """
+    import transformers
+
+    assert hasattr(modeling_module, "eager_attention_forward"), (
+        f"transformers {transformers.__version__}: {modeling_module.__name__}에 "
+        "eager_attention_forward가 없습니다 — 패치 지점 변경 필요 (runbook '패치 검증' 항목)")
+
+    CTX.layer_module_ids = frozenset(id(m) for m in layer_self_attns)
+    CTX.num_layers = len(layer_self_attns)
+
+    if not getattr(modeling_module.eager_attention_forward, "__avcd_patched__", False):
+        modeling_module.eager_attention_forward = _wrapped_eager(
+            modeling_module.eager_attention_forward)
+        logger.info("%s eager attention 패치 완료 (%d layers)",
+                    modeling_module.__name__, CTX.num_layers)
+    return CTX
+
+
 def patch_qwen25_omni(model) -> AVCDPatchContext:
     """Qwen2.5-Omni 모델의 thinker text decoder에 AVCD 패치 적용. 반환된 CTX로 제어."""
-    import transformers
     from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as m
 
-    assert hasattr(m, "eager_attention_forward"), (
-        f"transformers {transformers.__version__}: eager_attention_forward가 없습니다 — "
-        "패치 지점 변경 필요 (runbook '패치 검증' 항목 참조)")
     assert model.config._attn_implementation == "eager", (
         "AVCD는 attn_implementation='eager' 로드가 필수입니다")
-
     layers = model.thinker.model.layers
-    CTX.layer_module_ids = frozenset(id(l.self_attn) for l in layers)
-    CTX.num_layers = len(layers)
-
-    if not getattr(m.eager_attention_forward, "__avcd_patched__", False):
-        m.eager_attention_forward = _wrapped_eager(m.eager_attention_forward)
-        logger.info("Qwen2.5-Omni eager attention 패치 완료 (%d layers)", CTX.num_layers)
-    return CTX
+    return install_patch(m, [l.self_attn for l in layers])
