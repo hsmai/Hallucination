@@ -65,6 +65,30 @@ python -m src.score --jsonl "results/runs/cmm/*.jsonl"
 python -m src.aggregate --results results/runs        # Table 1 형식 + 게이트 대조
 ```
 
+## 실행 모니터링 (체크포인트)
+
+run이 끝나기 전에도 진행 상태를 확인할 수 있다 (`tail -f logs/full_*.log`):
+
+- **매 50샘플, 한 줄 상태** — 진행률·속도·에러 + 누적 정확도·예측 분포(yes/no/기타)·방법별 internals 요약
+  (MAD 평균 weight, AVCD dominant 분포·EAD skip율) → 출력 붕괴·세팅 오류를 조기 발견
+- **전체의 1/4 지점마다 체크포인트 블록** — 두 목표를 그 자리에서 점검:
+  - **[정량]** 카테고리별 누적 정확도를 MAD 논문 Table 1 목표치와 Δ로 대조 (그 run의 벤치마크 지표 형식 그대로)
+  - **[정성]** 해당 시점 샘플의 질문/GT/raw 예측/internals + 장면 설명(GT 캡션) +
+    **서술 프로브**: MAD Fig.9-10과 같은 조건(그림의 프롬프트 문구 × 해당 방법의 공식 디코딩 × 긴 생성)으로
+    전체 raw text를 생성해 로그에 출력. 프레임 jpg와 함께 `results/.../checkpoints/`에 저장
+
+```
+══ 체크포인트 2/4 (1710번째 처리) — videollama2_av × mad × avhbench ══
+[정량] Video-Driven Audio Hall.: 78.9% (목표 79.7 | Δ -0.8) [n=1150] ...
+[정성] sample 00199 | GT: Yes | 예측: 'Yes' [정답]
+  프로브 Q: Please describe what you can hear and see in detail.
+  전체 출력: "The video shows a brown dog ..."
+```
+
+- 프로브·프레임은 **모니터링 전용**(본 실험 JSONL 미기록 — 수치 무오염을 테스트로 고정), 모니터링 실패는 본 실험을 중단시키지 않음
+- 설정: yaml `monitoring.*` (체크포인트 지점·프로브 프롬프트·생성 길이·프레임 수)
+- 이상 발견 시 kill → 수정 → 재실행하면 처리분은 skip하고 이어서 진행 (중단-재개)
+
 ## 저장소 구조
 
 ```
@@ -72,7 +96,7 @@ configs/unified_settings.yaml   # 모든 세팅의 단일 소스 (확정값 / UN
 data/qa/                        # 벤치마크 QA json (경량 — 미디어는 서버에만)
 src/
   config.py, data.py            # 설정·데이터 공통 로더
-  runner.py                     # 실험 러너 (JSONL 로깅, 중단-재개, --set 오버라이드)
+  runner.py                     # 실험 러너 (JSONL 로깅, 중단-재개, --set 오버라이드, 체크포인트 모니터링)
   score.py, aggregate.py        # 채점(OURS 채점기 교체 지점) · D1 테이블 생성
   mining.py                     # D3: MAD·AVCD 동시 오답 샘플 마이닝
   methods/                      # base / vcd_ext / mad / avcd 디코딩 플러그인
