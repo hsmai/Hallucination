@@ -1,5 +1,7 @@
 # 우리 하네스(src/) 실행에 필요한 최소 의존성.
 # 모델 의존성(torch/transformers 등)은 서버의 복제된 conda env가 제공하므로 여기 넣지 않는다.
+# 로컬 dry-run/테스트용 torch(CPU)는 별도 설치:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 pyyaml>=6.0
 tqdm>=4.65
 pytest>=7.0
