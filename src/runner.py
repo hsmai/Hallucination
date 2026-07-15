@@ -92,8 +92,44 @@ def write_meta(meta_path: Path, args, cfg, n_total: int, n_done: int) -> None:
     meta_path.write_text(json.dumps(history, indent=2, ensure_ascii=False))
 
 
+def apply_overrides(cfg, sets: list) -> None:
+    """--set dotted.key=value 오버라이드 (게이트의 α 그리드/β 판정/경로 분리용).
+
+    UNKNOWN_pending_server 노드는 _resolved_value를 교체하고, 일반 노드는 값을 교체한다.
+    value는 JSON으로 파싱 시도(숫자/불리언), 실패 시 문자열.
+    """
+    from .config import UNKNOWN
+    for item in sets:
+        key, sep, val = item.partition("=")
+        if not sep:
+            raise ValueError(f"--set 형식 오류: {item!r} (dotted.key=value)")
+        try:
+            parsed = json.loads(val)
+        except json.JSONDecodeError:
+            parsed = val
+        node = cfg._resolved
+        parts = key.split(".")
+        for p in parts[:-1]:
+            if isinstance(node, dict) and node.get("status") == UNKNOWN:
+                node = node["_resolved_value"]
+            if not isinstance(node, dict) or p not in node:
+                raise KeyError(f"--set 경로 없음: {key} (막힌 지점: {p})")
+            node = node[p]
+        if isinstance(node, dict) and node.get("status") == UNKNOWN:
+            node = node["_resolved_value"]
+        leaf = parts[-1]
+        if leaf not in node:
+            raise KeyError(f"--set 경로 없음: {key} (막힌 지점: {leaf})")
+        if isinstance(node[leaf], dict) and node[leaf].get("status") == UNKNOWN:
+            node[leaf]["_resolved_value"] = parsed
+        else:
+            node[leaf] = parsed
+        logger.info("override: %s = %r", key, parsed)
+
+
 def run(args) -> int:
     cfg = load_config(args.config)
+    apply_overrides(cfg, args.set)
     seed = cfg.get("experiment.seed")
     config_hash = cfg.config_hash()
 
@@ -189,6 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ids-file", default=None, help="sample_id 목록 파일 — 해당 샘플만 실행 (D3 재생성)")
     p.add_argument("--max-new-tokens", type=int, default=0, help="디코딩 길이 오버라이드 (D3 서술형 재생성)")
     p.add_argument("--out-tag", default="", help="출력 파일 구분 태그 — 재생성 실행 시 본 결과와 분리 (예: regen256)")
+    p.add_argument("--set", action="append", default=[],
+                   help="설정 오버라이드 dotted.key=value (반복 가능) — 게이트 α그리드/β판정/경로분리용")
     p.add_argument("--log-interval", type=int, default=200)
     return p
 

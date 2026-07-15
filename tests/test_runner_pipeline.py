@@ -106,6 +106,37 @@ class TestRunnerPipeline:
         assert "config_pending" in meta[0]
 
 
+class TestOverrides:
+    """--set 오버라이드 (게이트 α그리드/β판정의 기반)."""
+
+    def test_set_unknown_node_and_plain_node(self):
+        from src.config import load_config
+        from src.runner import apply_overrides
+        cfg = load_config()
+        apply_overrides(cfg, ["methods.avcd.alpha.cmm=1.5",        # UNKNOWN 노드
+                              "methods.avcd.faithful_mode=false",  # 일반 노드 (json bool)
+                              "benchmarks.avhbench.split=avcd_val"])
+        assert cfg.get("methods.avcd.alpha.cmm") == 1.5
+        assert cfg.get("methods.avcd.faithful_mode") is False
+        assert cfg.get("benchmarks.avhbench.split") == "avcd_val"
+
+    def test_set_bad_key_raises(self):
+        from src.config import load_config
+        from src.runner import apply_overrides
+        cfg = load_config()
+        with pytest.raises(KeyError):
+            apply_overrides(cfg, ["methods.avcd.no_such_key=1"])
+        with pytest.raises(ValueError):
+            apply_overrides(cfg, ["missing_equals_sign"])
+
+    def test_config_hash_changes_with_override(self):
+        from src.config import load_config
+        from src.runner import apply_overrides
+        c1, c2 = load_config(), load_config()
+        apply_overrides(c2, ["methods.avcd.alpha.cmm=3.0"])
+        assert c1.config_hash() != c2.config_hash()  # 오버라이드가 manifest에 반영됨
+
+
 class TestScorerRules:
     """MAD score.py 이식 정확성 — 원본 규칙의 대표 케이스."""
 
