@@ -1,0 +1,133 @@
+# =============================================================================
+# unified_settings.yaml — 모든 실험 세팅의 단일 소스 (하드코딩 금지)
+#
+# 상태 표기:
+#   확정        : 논문/blueprint에서 확정된 값. 변경 시 보고 필요.
+#   UNKNOWN_pending_server : 서버의 OURS(omni-steering) 코드 확인 후 확정.
+#                            그 전까지는 temp_default(MAD repo 세팅)를 사용.
+# 문자열 값 "UNKNOWN_pending_server"를 읽은 코드는 반드시 같은 키의
+# temp_default를 사용하고, 로그에 pending 경고를 남긴다.
+# =============================================================================
+
+experiment:
+  seed: 42                      # 확정
+  dtype: bfloat16               # 확정 (4bit/8bit 양자화 금지)
+  attn_implementation: eager    # 확정 — AVCD가 full attention weight 요구, 전 방법 공통
+  device: cuda
+  single_run: true              # greedy 단일 run
+
+decoding:                       # 임시(MAD 논문 세팅) — 서버에서 OURS generate 인자 확인 후 확정
+  do_sample: false
+  temperature: 0.0
+  top_p: null                   # greedy에서는 미사용
+  max_new_tokens:
+    avhbench:
+      status: UNKNOWN_pending_server
+      temp_default: 1           # MAD repo: AVHBench는 max_new_tokens=1
+    cmm:
+      status: UNKNOWN_pending_server
+      temp_default: 16          # MAD repo는 256~512였으나 yes/no 채점이므로 짧게. 서버에서 확정
+
+models:
+  videollama2_av:
+    hf_id: DAMO-NLP-SG/VideoLLaMA2.1-7B-AV
+    local_path: UNKNOWN_pending_server        # 서버 HF 캐시/omni-steering 내 경로 확인 후 기록
+    backbone: qwen2
+    num_llm_layers: 28
+    # AVCD span 참고값(하드코딩 금지 — 런타임에 동적 계산하고 아래 값과 대조 검증만 한다)
+    expected_video_tokens: 676
+    expected_audio_tokens: 1496
+  qwen2_5_omni_7b:
+    hf_id: Qwen/Qwen2.5-Omni-7B               # 7B 고정 (MAD sh의 3B 예시 사용 금지)
+    local_path: UNKNOWN_pending_server
+    disable_talker: true
+    use_audio_in_video: true                  # av 입력 시
+
+paths:
+  # 서버 데이터/결과 경로 프리픽스. 로컬 개발 시에는 존재검사 skip 플래그 사용.
+  data_prefix: UNKNOWN_pending_server          # 예상: /home3/t202401082/omni-steering/ 하위
+  avhbench_media_dir: UNKNOWN_pending_server   # {prefix}/AVHBench/videos 형태로 조립
+  cmm_media_dir: UNKNOWN_pending_server
+  results_dir: results
+  skip_media_existence_check: true             # 로컬 개발용. 서버에서는 false
+
+benchmarks:
+  avhbench:
+    qa_json: data/qa/avhbench_qa.json          # 로컬 확보본. 서버에서 OURS 내부 파일로 교체 가능
+    split:
+      status: UNKNOWN_pending_server
+      temp_default: full_qa_excluding_av_tasks # MAD 방식: QA.json에서 task에 'AV' 포함 제외 (3,426)
+      # 대안: avcd_val(205) / avcd_test(5302) — third_party/AVCD/json/
+    tasks_for_overall:                          # MAD score.py 기준
+      - Video-driven Audio Hallucination
+      - Audio-driven Video Hallucination
+  cmm:
+    qa_json: data/qa/cmm_qa.json
+    categories:
+      status: UNKNOWN_pending_server
+      temp_default: all                        # ⚠ MAD repo 스크립트 default는 over-reliance만.
+                                               #   지표(Visual/Audio/Language Dominance)는 전체 필요 추정
+    audio_from_video_stem: true                # audio = video 경로의 .mp4→.wav
+
+prompts:
+  # 서버의 OURS 프롬프트로 확정 예정. temp_default는 MAD repo 세팅(ANSWER_QUERY_PROMPT).
+  avhbench_suffix:
+    status: UNKNOWN_pending_server
+    temp_default: " Answer only 'Yes' or 'No'. Do not include any explanation."
+    # repo 내 변형들: " Answer yes or no." / " Answer only 'Yes' or 'No'." / " Only yes/no. No extra text."
+  cmm_suffix:
+    status: UNKNOWN_pending_server
+    temp_default: " Answer only 'Yes' or 'No'. Do not include any explanation."
+  qwen_system_prompt: "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."
+  videollama2_system_prompt: ""               # qwen2 backbone은 chat template 기본값 외 없음
+  mad_modality_query: "To answer this question, which modality is needed (audio, video, or both): "
+  mad_question_wrap: "Question: {question}\n" # head 프롬프트에서 question을 감싸는 형식
+
+methods:
+  base: {}                                     # 원본 greedy 디코딩
+
+  vcd_ext:
+    # MAD repo mm_default_cd 계수: [1+3γ, -γ, -γ, -γ] over [VA, V, A, T]  (확정: Eq.10 형식)
+    gamma:
+      status: UNKNOWN_pending_server
+      temp_default: 0.5                        # mm_default_cd default. 논문 대응값 서버에서 확인
+    branch_mode:
+      status: UNKNOWN_pending_server
+      temp_default: modality_ablation          # MAD식. 대안: diffusion_noise (AVCD __init__VCD.py식)
+    noise_step: 500                            # branch_mode=diffusion_noise일 때만 사용
+
+  mad:
+    gamma: 2.5                                 # 확정 (논문·batch sh)
+    # 가중식 (코드 기준, docs/code_analysis.md §1.4):
+    #   w_VA=2+2γ·p_both, w_V=1-γ(p_both-p_video), w_A=1-γ(p_both-p_audio), w_T=-γ(p_video+p_audio)
+    weight_per_question: true                  # 질문당 1회 추출 후 고정 (확정)
+
+  avcd:
+    alpha:
+      avhbench: 2.5                            # 확정 (논문·inference_AVH_*.py)
+      cmm:
+        status: UNKNOWN_pending_server         # 논문에 없음 → 서버 게이트에서 그리드 탐색 후 확정
+        temp_default: 0.5
+        grid_search: {min: 0.5, max: 3.0, step: 0.5, n_samples: 100}
+    masking_top_p: 0.5                         # 확정 (논문 P=50%, 코드 quantile 0.5)
+    exclude_last_layer: true                   # 확정 — 마스킹·dominance 모두 마지막 layer 제외
+    ead_tau: 0.6                               # 확정 (논문·코드 일치)
+    plausibility_beta: 0.2                     # ⚠ 코드값(작업 원칙: 코드 우선). 논문/blueprint는 0.1
+                                               #   → 보고 완료, 서버 게이트에서 재검토
+    plausibility_beta_paper: 0.1               # 대조 실험용
+    implausible_fill: -1.0e-4                  # ⚠ 코드 그대로(-inf 아님). faithful 재현용
+    faithful_mode: true                        # true: 코드 특이점 그대로 / false: 논문 서술 기준(-inf, β=0.1)
+
+scoring:
+  scorer:
+    status: UNKNOWN_pending_server             # OURS 채점기 이식이 최종 목표 (join 시 correct 기준 일치)
+    temp_default: mad_score                    # MAD repo score.py 로직 이식본 (src/score.py)
+  yes_before_no: true                          # MAD extract_answer: yes 패턴 우선
+  dedup_key: [video_id, question]
+
+output:
+  # D2 스키마 (blueprint) — per-sample JSONL
+  jsonl_fields: [sample_id, video_id, benchmark, category, question, ground_truth,
+                 method, model, prediction, correct, internals,
+                 inference_time_s, seed, config_hash]
+  sample_id_format: "{video_id}::{question}"   # 원본 키 기반, 자체 넘버링 금지 (선배와 합의 필요)
