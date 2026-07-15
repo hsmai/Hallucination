@@ -91,17 +91,43 @@
 
 - ⚠ 슬라이드 p45의 Ours(Base) VideoLLaMA2는 72.0/80.2/68.5/**73.6** (Experiments.pdf는 74) — 두 버전 존재.
   blueprint의 "73.6"은 슬라이드 버전. **게이트 목표: CMM Overall 73.6~74.0 / 73.1, AVH 77.4 / 76.8**
-- **핵심 정황**: Ours(Base) ≈ MAD 논문 Base(77.4=77.4, 76.8≈76.9, 73.6/74≈73.5, 73.1≈72.7)
-  → **선배 파이프라인은 MAD 프로토콜(QA.json에서 AV task 제외 split + MAD 채점 방식)을 따를 가능성이 매우 높음.**
-  로컬 개발은 MAD 프로토콜 기준으로 확정 진행, 서버에서 OURS 코드로 최종 검증만 수행.
+- **정황(가설)**: Ours(Base) ≈ MAD 논문 Base(77.4=77.4, 76.8≈76.9, 73.6/74≈73.5, 73.1≈72.7)
+  → 선배 파이프라인이 MAD 프로토콜(QA.json에서 AV task 제외 split + MAD 채점 방식)을 따를 가능성이 높음.
+  **단, 이는 정황일 뿐 확정이 아니다.** 로컬 개발은 이 가설을 임시 기본값으로 진행하되,
+  모든 항목은 서버의 OURS 코드 확인 전까지 UNKNOWN_pending_server 상태를 유지한다.
 
-## 5. blueprint 충돌 해소 요약
+## 5. blueprint 충돌 정리 (전부 **잠정** — 서버 OURS 확인 후 최종 확정)
 
-| 항목 | 이전 상태 | 해소 결과 |
+| 항목 | 이전 상태 | 정리 결과 (잠정) |
 |---|---|---|
-| VCD-ext 방식 (왜곡 vs 제거) | 이중성 | **MAD Eq.10 = modality 제거로 확정** (α만 미정: {0.5,2.5} 게이트 대조) |
-| AVCD β | 코드 0.2 vs blueprint 0.1 | 논문도 0.1(−inf). 코드(0.2, −1e-4)와 상이 — faithful_mode(코드) 기본, 논문 모드 옵션. 게이트에서 val 81.95 재현되는 쪽 채택 |
-| AVHBench split | 3종 후보 | MAD 프로토콜(AV task 제외 3,426) 사실상 확정. AVCD 논문 수치 대조시에만 full(72.15)/val(81.95) 사용 |
-| CMM 구성 | all vs over-reliance | 지표가 V/A/L Dominance → **over-reliance_unimodal_priors 카테고리**(의 sub_category)로 사실상 확정. L2에서 데이터로 검증 |
+| VCD-ext 방식 (왜곡 vs 제거) | 이중성 | MAD 논문 Eq.10 근거로 **modality 제거를 잠정 채택** (α 미정: {0.5,2.5} 게이트 대조) |
+| AVCD β | 코드 0.2 vs blueprint 0.1 | 논문은 0.1(−inf), 코드는 0.2(−1e-4) — 양쪽 유지, 게이트에서 val 81.95 재현되는 쪽 채택 |
+| AVHBench split | 3종 후보 | MAD 프로토콜(AV task 제외 3,426)이 정황상 유력 — temp_default로만 사용. AVCD 논문 수치 대조시에만 full(72.15)/val(81.95) 사용 |
+| CMM 구성 | all vs over-reliance | 지표가 V/A/L Dominance → over-reliance_unimodal_priors 카테고리가 유력. L2에서 데이터로 검증, 서버에서 확정 |
 | CMM용 AVCD α | 미정 | 논문 규칙 "AVHBench 외 0.5" → temp 0.5 + 그리드 유지 |
 | 게이트 목표치 | Base만 | MAD 논문 Table 1 전체(§1) + Ours(Base)(§4)로 확장 |
+
+## 6. 핵심 목표·산출물 정의 (2026-07-15 사용자 지시로 명문화)
+
+**목표**: Ours(Omni-Steering) 대비 우수성 입증 자료 확보. 구체적으로:
+
+1. **정량**: 비교군 4종(Base/VCD-ext/AVCD/MAD) × 2모델 × 2벤치마크(CMM, AVHBench)를
+   **서버에 세팅된 환경·동일 데이터·동일 벤치마크에서 직접 실행**하여 결과 확보
+   = Experiments.pdf의 **비볼드 수치들(= MAD 논문 Table 1)을 우리 손으로 재생산** (MAD 기준 main Table 1 확보)
+2. **정성**: MAD 논문 15~16p 스타일의 **비교 가능 샘플**(같은 입력에 대한 방법별 답변 대조)
+   = blueprint D3(마이닝 리스트 + 프레임 패키징)와 동일 항목. per-sample JSONL(D2)이 그 재료
+
+**AVCD 재구현 갭 2건 (사용자와 교차 확인됨, blueprint L4-3·리스크 §9-2와 일치)**:
+
+- MAD 논문 Table 1의 AVCD 수치(CMM 포함, Qwen 포함)는 **MAD 저자들의 비공개 재구현**으로 산출된 것.
+  MAD repo에는 base/MAD 스크립트만 있고 AVCD 재구현 코드는 없다. AVCD 공식 repo는
+  VideoLLaMA2 전용 + 벤치마크도 다름(MUSIC-AVQA/AVHBench, CMM 없음).
+- 따라서 우리가 메워야 할 갭:
+  1. **AVCD 디코딩 로직을 MAD식 하네스(CMM 평가 파이프라인)에 이식**
+  2. **AVCD의 Qwen2.5-Omni 버전 신규 포팅** (attention 접근 + modality 토큰 span 동적 계산 포함)
+- 함의: 우리 AVCD 구현이 Table 1의 AVCD 수치와 정확히 일치할 보장은 없음(저자 재구현의 세부 미공개).
+  Table 1 AVCD 수치는 ±2%p **참고 기준**이며, 불일치 시 원인 분석 기록 후 우리 구현 수치를 보고.
+  실패 시 fallback: 해당 칸 "공식 코드 미지원" 표기 (blueprint §9-2).
+
+**서버 의존성**: 실제 16 run 실행은 서버 계정 발급 후에만 가능. 그 전 로컬 작업(L2~L5)은
+데이터 로더·하네스·방법 구현·CPU 테스트·runbook 등 서버 무의존 준비에 한정한다.

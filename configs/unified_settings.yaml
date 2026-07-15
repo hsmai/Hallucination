@@ -93,8 +93,8 @@ methods:
       status: UNKNOWN_pending_server           # 논문·코드 모두 값 미명시 (mm_default_cd default 0.5)
       temp_default: 0.5
       gate_candidates: [0.5, 2.5]              # 게이트에서 MAD 논문 Table 1 VCD-ext 행과 대조하여 확정
-    branch_mode: modality_ablation             # 확정 — MAD 논문 Eq.7의 ˜ = modality 제거 (paper_settings.md §1)
-                                               # (diffusion_noise는 AVCD repo VCD 전용, 우리 비교군 정의 아님)
+    branch_mode: modality_ablation             # 잠정 — MAD 논문 Eq.7·Eq.10 근거 (paper_settings.md §1·§5).
+                                               # 서버 OURS 확인 후 최종. (diffusion_noise는 AVCD repo VCD 전용)
 
   mad:
     gamma: 2.5                                 # 확정 (논문·batch sh)
@@ -133,6 +133,8 @@ gate_targets:
     videollama2_av: {cmm_overall: [73.6, 74.0], avh_overall: 77.4}   # CMM은 두 버전 존재
     qwen2_5_omni_7b: {cmm_overall: 73.1, avh_overall: 76.8}
   # MAD 논문 Table 1 (전 비교군 재현 목표, CMM V/A/L/Overall, AVH VdAH/AdVH/Overall)
+  # ⚠ AVCD 행은 MAD 저자들의 비공개 재구현 수치 — 우리 신규 구현과 정확히 일치할 보장 없음.
+  #   ±2%p 참고 기준으로만 사용, 불일치 시 원인 분석 기록 (paper_settings.md §6)
   mad_paper_table1:
     videollama2_av:
       base:    {cmm: [71.8, 80.0, 68.8, 73.5], avh: [75.7, 79.0, 77.4]}

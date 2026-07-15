@@ -238,8 +238,9 @@ entropy(softmax(orig_logits)) < 0.6  →  next = orig_logits  (EAD skip, τ=0.6)
 
 ## 5. 구현에 반영할 리스크/결정 사항 요약
 
-1. **VCD-ext 의미 이중성 → 해소됨**: MAD 논문 Eq.10 원문 확인 결과 ˜(perturbation)=modality 제거이며 코드 `mm_default_cd`와 일치. **modality_ablation으로 확정** (`docs/paper_settings.md` §1·§5). α 값만 미정({0.5, 2.5} 게이트 대조)
-2. **AVCD Qwen 포팅**: span을 token id 기반 boolean mask로 동적 계산(interleave 대응), attention은 `attn_implementation="eager"` + `output_attentions=True`로 접근. thinker(text LLM) 레이어 수 기준 "마지막 layer 제외"를 일반화(`num_layers−1`)
+1. **VCD-ext 의미 이중성 → 잠정 정리**: MAD 논문 Eq.10 원문 확인 결과 ˜(perturbation)=modality 제거이며 코드 `mm_default_cd`와 일치 → **modality_ablation 잠정 채택** (`docs/paper_settings.md` §1·§5), 서버 OURS 확인 후 최종. α 값 미정({0.5, 2.5} 게이트 대조)
+2. **AVCD 재구현 갭 2건** (MAD Table 1의 AVCD 수치는 MAD 저자 비공개 재구현 — repo에 코드 없음, `paper_settings.md` §6):
+   ① AVCD 디코딩을 CMM 평가 파이프라인(MAD식 하네스)에 이식 ② **Qwen2.5-Omni용 신규 포팅** — span을 token id 기반 boolean mask로 동적 계산(interleave 대응), attention은 `attn_implementation="eager"` + `output_attentions=True`로 접근, "마지막 layer 제외"는 `num_layers−1`로 일반화. 실패 시 해당 칸 "공식 코드 미지원" 표기(blueprint §9-2)
 3. **AVCD 재현 충실도**: β=0.2·`-1e-4` fill·threshold의 layer 누적 방식 등 코드 특이점을 그대로 재현하는 `faithful` 모드를 기본으로 하고, 논문 서술 기준(β=0.1, −inf) 대안을 yaml 옵션으로
 4. **MAD 가중 수식**은 지시서 요약("γ·w 가중합")이 아닌 코드 수식(§1.4)으로 구현·테스트
 5. AVCD 공식 short-answer 경로는 패치된 transformers에 의존(레포 부재) → 우리는 수동 디코딩 루프로 구현하며, AVHBench에서 AVCD 논문 수치와의 대조는 `generate_long` 경로 수식 기준
