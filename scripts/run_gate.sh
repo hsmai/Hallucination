@@ -45,8 +45,9 @@ echo "########## [3/4] AVCD CMM α 그리드 (${GRID_N}샘플) ##########"
 for alpha in 0.5 1.0 1.5 2.0 2.5 3.0; do
   for model in videollama2_av qwen2_5_omni_7b; do
     echo "--- α=$alpha $model"
-    runner "$model" avcd cmm --limit "$GRID_N" \
+    runner "$model" avcd cmm --ids-file data/qa/gate_cmm_ids.txt \
       --set methods.avcd.alpha.cmm="$alpha" --out-tag "alpha${alpha}" \
+      --set monitoring.enabled=false \
       2>&1 | tail -1
   done
 done
@@ -60,6 +61,7 @@ for mode in true false; do
   runner videollama2_av avcd avhbench \
     --set benchmarks.avhbench.split=avcd_val \
     --set methods.avcd.faithful_mode="$mode" --out-tag "beta_faithful_${mode}" \
+    --set monitoring.enabled=false \
     2>&1 | tail -1
 done
 conda run -n "$VL_ENV" --no-capture-output python -m src.score \
