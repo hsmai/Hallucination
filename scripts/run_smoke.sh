@@ -22,7 +22,7 @@ for model in videollama2_av qwen2_5_omni_7b; do
       echo "=== smoke: $tag (env: $(env_for $model)) ==="
       if conda run -n "$(env_for $model)" --no-capture-output \
           python -m src.runner --model "$model" --method "$method" --benchmark "$bench" \
-          --limit "$N" --set paths.results_dir="$RESULTS" >"$log" 2>&1; then
+          --limit "$N" --retry-errors --set paths.results_dir="$RESULTS" >"$log" 2>&1; then
         echo "  OK"
       else
         echo "  ✗ FAIL — $log 확인"; FAIL=$((FAIL+1))

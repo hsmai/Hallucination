@@ -60,6 +60,10 @@ class QwenOmniAdapter(ModelAdapter):
             model_path, config=model_cfg, torch_dtype=dtype, device_map="cuda",
             attn_implementation=encoder_impl)
         self._make_thinker_eager()
+        # lm_head 입력을 마지막 위치로 슬라이스 (OURS _lm_head_last_hook 이식):
+        # 전 위치 logits [1,N,152k]가 N~10k에서 ~3GB → OOM 원인. 우리는 항상 [0,-1]만 읽으므로 무손실.
+        self.model.thinker.lm_head.register_forward_pre_hook(
+            self._lm_head_last_hook, with_kwargs=True)
         self.processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
         if cfg.get("models.qwen2_5_omni_7b.disable_talker", True) and hasattr(self.model, "disable_talker"):
             self.model.disable_talker()   # 미생성 시 no-op
@@ -80,6 +84,18 @@ class QwenOmniAdapter(ModelAdapter):
                 "thinker_config에서 audio/video token index를 찾지 못함 — "
                 "S1에서 config 구조 확인 필요")
         self._warned_no_audio = False
+
+    @staticmethod
+    def _lm_head_last_hook(module, args, kwargs):
+        """(OURS probe/cmm_contam.py 이식) hidden [1,N,h] → [1,-1:,h] 슬라이스."""
+        hs = args[0] if args else kwargs.get("input")
+        if hs is not None and hasattr(hs, "dim") and hs.dim() == 3 and hs.shape[1] > 1:
+            if args:
+                return (hs[:, -1:, :],) + tuple(args[1:]), kwargs
+            k = dict(kwargs)
+            k["input"] = hs[:, -1:, :]
+            return args, k
+        return None
 
     def _make_thinker_eager(self):
         """thinker text decoder attention 스왑 (OURS _make_thinker_eager/_make_thinker_sdpa 이식).
