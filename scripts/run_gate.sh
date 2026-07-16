@@ -29,8 +29,13 @@ for model in videollama2_av qwen2_5_omni_7b; do
   for bench in avhbench cmm; do
     for method in base vcd_ext mad avcd; do
       echo "--- gate: $model × $method × $bench"
-      runner "$model" "$method" "$bench" --limit "$N" \
-        2>&1 | tee "$LOG_DIR/gate_${model}_${method}_${bench}.log" | tail -2
+      if [ "$bench" = "cmm" ]; then
+        runner "$model" "$method" cmm --ids-file data/qa/gate_cmm_ids.txt --retry-errors \
+          2>&1 | tee "$LOG_DIR/gate_${model}_${method}_${bench}.log" | tail -2
+      else
+        runner "$model" "$method" avhbench --limit "$N" --retry-errors \
+          2>&1 | tee "$LOG_DIR/gate_${model}_${method}_${bench}.log" | tail -2
+      fi
     done
   done
 done
