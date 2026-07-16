@@ -149,7 +149,9 @@ class VideoLLaMA2Adapter(ModelAdapter):
                 tensors["va"] = self.processor["video"](sample.video_path, va=True)
                 tensors["a"] = process_audio_from_video(sample.video_path, 0)
             else:                                       # video-only (CMM Language Dom)
-                tensors["va"] = tensors["v"]
+                # 선배 vl2_contam과 동일: wav이 없으면 va=True 그대로 → 무음 mp4에서
+                # 무음 오디오 토큰 1,496개가 포함됨 (게이트 per-sample 대조에서 확인된 정렬 포인트)
+                tensors["va"] = self.processor["video"](sample.video_path, va=True)
         elif sample.audio_path:                         # audio-only (본 매트릭스엔 없음)
             tensors["a"] = process_audio_from_video(sample.audio_path, 0)
 
