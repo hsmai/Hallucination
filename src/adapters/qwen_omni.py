@@ -118,17 +118,57 @@ class QwenOmniAdapter(ModelAdapter):
             {"role": "user", "content": content},
         ]
 
-    def _inputs(self, conversation, use_audio_in_video: bool):
+    def _media(self, ctx: dict) -> dict:
+        """비디오 디코드·오디오 추출을 **샘플당 1회** 캐시 (성능 최적화 — 수치 불변).
+
+        2026-07-16 스모크 실측: process_mm_info를 forward마다 부르면 비디오 디코드가
+        반복되어 AVCD가 147s/sample (디코드가 지배적). 디코드 산출물(ndarray)은 branch·
+        step 간 완전 동일하므로 재사용한다."""
+        if "_media" in ctx:
+            return ctx["_media"]
         from qwen_omni_utils import process_mm_info
-        text = self.processor.apply_chat_template(conversation, add_generation_prompt=True,
+        m = {"videos": None, "audios_muxed": None, "audios_sep": None}
+        if ctx["video_path"]:
+            conv_v = [{"role": "user", "content": [
+                {"type": "video", "video": ctx["video_path"]}]}]
+            if ctx["uaiv"]:                       # AVH: mp4에서 audio도 함께 추출
+                audios, _, videos = process_mm_info(conv_v, use_audio_in_video=True)
+                m["videos"], m["audios_muxed"] = videos, audios
+            else:
+                _, _, videos = process_mm_info(conv_v, use_audio_in_video=False)
+                m["videos"] = videos
+        if ctx["audio_src"]:
+            if ctx["uaiv"]:
+                m["audios_sep"] = m["audios_muxed"]   # 동일 트랙 재사용
+            else:
+                conv_a = [{"role": "user", "content": [
+                    {"type": "audio", "audio": ctx["audio_src"]}]}]
+                audios, _, _ = process_mm_info(conv_a, use_audio_in_video=False)
+                m["audios_sep"] = audios
+        ctx["_media"] = m
+        return m
+
+    def _inputs_kind(self, ctx: dict, kind: str, text_override: str | None = None):
+        """kind별 processor 입력 구성 (캐시된 디코드 산출물 사용). (inputs, uaiv) 반환."""
+        conv = self._conversation(ctx, kind, text_override)
+        text = self.processor.apply_chat_template(conv, add_generation_prompt=True,
                                                   tokenize=False)
-        audios, images, videos = process_mm_info(conversation,
-                                                 use_audio_in_video=use_audio_in_video)
-        inputs = self.processor(text=text, audio=audios, images=images, videos=videos,
-                                return_tensors="pt", padding=True,
-                                use_audio_in_video=use_audio_in_video)
-        return {k: (v.to(self.model.device) if hasattr(v, "to") else v)
-                for k, v in inputs.items()}
+        m = self._media(ctx)
+        audio, videos, uaiv = None, None, False
+        if kind in ("va", "head"):
+            videos = m["videos"]
+            uaiv = bool(ctx["uaiv"] and videos is not None)
+            audio = m["audios_muxed"] if uaiv else \
+                (m["audios_sep"] if ctx["audio_path"] else None)   # CMM AV: 별도 wav 블록
+        elif kind == "v":
+            videos = m["videos"]
+        elif kind == "a":
+            audio = m["audios_sep"]
+        inputs = self.processor(text=text, audio=audio, images=None, videos=videos,
+                                return_tensors="pt", padding=True, use_audio_in_video=uaiv)
+        inputs = {k: (v.to(self.model.device) if hasattr(v, "to") else v)
+                  for k, v in inputs.items()}
+        return inputs, uaiv
 
     def prepare(self, sample, question_with_suffix: str) -> dict:
         audio_in_video = bool(sample.extra.get("audio_in_video", False))
@@ -150,8 +190,7 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ base
 
     def greedy_generate(self, ctx: dict, max_new_tokens: int) -> str:
-        uaiv = ctx["uaiv"]
-        inputs = self._inputs(self._conversation(ctx, "va" if ctx["video_path"] else "t"), uaiv)
+        inputs, uaiv = self._inputs_kind(ctx, "va" if ctx["video_path"] else "t")
         with torch.no_grad():
             out = self.model.generate(**inputs, use_audio_in_video=uaiv,
                                       max_new_tokens=max_new_tokens,
@@ -178,8 +217,8 @@ class QwenOmniAdapter(ModelAdapter):
     def branch_prefill(self, ctx: dict):
         logits, branches = [], []
         with torch.inference_mode():
-            for kind, uaiv in self._branch_kinds(ctx):
-                inputs = self._inputs(self._conversation(ctx, kind), uaiv)
+            for kind, _ in self._branch_kinds(ctx):
+                inputs, uaiv = self._inputs_kind(ctx, kind)
                 out = self.model.thinker(**inputs, use_audio_in_video=uaiv, use_cache=True)
                 logits.append(out.logits[0, -1, :].float().cpu())
                 branches.append({"past": out.past_key_values, "uaiv": uaiv})
@@ -199,9 +238,7 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ MAD
 
     def modality_query_probs(self, ctx: dict, query_prompt: str):
-        uaiv = ctx["uaiv"]
-        conv = self._conversation(ctx, "head", text_override=query_prompt)
-        inputs = self._inputs(conv, uaiv)
+        inputs, uaiv = self._inputs_kind(ctx, "head", text_override=query_prompt)
         with torch.inference_mode():
             out = self.model.thinker(**inputs, use_audio_in_video=uaiv)
         z = []
@@ -214,8 +251,11 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ AVCD (신규 포팅)
 
     def _avcd_inputs(self, ctx: dict, generated_ids):
-        uaiv = ctx["uaiv"]
-        inputs = self._inputs(self._conversation(ctx, "va" if ctx["video_path"] else "t"), uaiv)
+        # AVCD의 orig/masked forward는 완전히 같은 입력을 공유 → processor 산출물까지 캐시
+        if "_avcd_base" not in ctx:
+            ctx["_avcd_base"] = self._inputs_kind(ctx, "va" if ctx["video_path"] else "t")
+        base_inputs, uaiv = ctx["_avcd_base"]
+        inputs = dict(base_inputs)                      # 얕은 복사 (텐서는 읽기 전용 재사용)
         if generated_ids:
             gen = torch.tensor([list(generated_ids)], device=self.model.device, dtype=torch.long)
             inputs["input_ids"] = torch.cat([inputs["input_ids"], gen], dim=1)
