@@ -16,22 +16,19 @@ experiment:
   device: cuda
   single_run: true              # greedy 단일 run
 
-decoding:                       # 임시(MAD 논문 세팅) — 서버에서 OURS generate 인자 확인 후 확정
+decoding:                       # 확정 (2026-07-16 OURS 코드 대조 — probe/inference.py forced_yesno)
   do_sample: false
   temperature: 0.0
   top_p: null                   # greedy에서는 미사용
   max_new_tokens:
-    avhbench:
-      status: UNKNOWN_pending_server
-      temp_default: 1           # MAD repo: AVHBench는 max_new_tokens=1
-    cmm:
-      status: UNKNOWN_pending_server
-      temp_default: 16          # MAD repo는 256~512였으나 yes/no 채점이므로 짧게. 서버에서 확정
+    avhbench: 1                 # 확정 — OURS Base = 마지막 위치 full-vocab argmax
+                                #   (= generate(max_new_tokens=1) 등가, 주석에 MAD-parity 명시)
+    cmm: 1                      # 확정 — 동일 (probe/cmm_contam.py forced_yesno)
 
 models:
   videollama2_av:
     hf_id: DAMO-NLP-SG/VideoLLaMA2.1-7B-AV
-    local_path: UNKNOWN_pending_server        # 서버 HF 캐시/omni-steering 내 경로 확인 후 기록
+    local_path: /home3/t202401082/.cache/huggingface/hub/models--DAMO-NLP-SG--VideoLLaMA2.1-7B-AV/snapshots/d944d4298cb0188c3d5406eff42929cb67731361  # 확정 — 선배 HF 캐시 (다운로드 불필요)
     backbone: qwen2
     num_llm_layers: 28
     # AVCD span 참고값(하드코딩 금지 — 런타임에 동적 계산하고 아래 값과 대조 검증만 한다)
@@ -39,48 +36,49 @@ models:
     expected_audio_tokens: 1496
   qwen2_5_omni_7b:
     hf_id: Qwen/Qwen2.5-Omni-7B               # 7B 고정 (MAD sh의 3B 예시 사용 금지)
-    local_path: UNKNOWN_pending_server
+    local_path: /home3/t202401082/.cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-7B/snapshots/ae9e1690543ffd5c0221dc27f79834d0294cba00  # 확정 — 선배 HF 캐시
     disable_talker: true
-    use_audio_in_video: true                  # av 입력 시
+    use_audio_in_video: true                  # AVHBench: mp4에 오디오 먹싱됨(muxed). CMM은 별도 wav→separate
 
 paths:
-  # 서버 데이터/결과 경로 프리픽스. 로컬 개발 시에는 존재검사 skip 플래그 사용.
-  data_prefix: UNKNOWN_pending_server          # 예상: /home3/t202401082/omni-steering/ 하위
-  avhbench_media_dir: UNKNOWN_pending_server   # {prefix}/AVHBench/videos 형태로 조립
-  cmm_media_dir: UNKNOWN_pending_server
+  # 확정 (2026-07-16) — 선배 안내: omni-steering 내부 데이터셋을 경로 맞춰 사용
+  data_prefix: /home3/t202401082/omni-steering/Dataset
+  avhbench_media_dir: /home3/t202401082/omni-steering/Dataset/AVH_Bench   # videos/{id}.mp4 (오디오 먹싱, audios/ 없음)
+  cmm_media_dir: /home3/t202401082/omni-steering/Dataset/CMM_dataset      # reorg_raw_files/... (+ _fixed/ 재인코딩본)
   results_dir: results
-  skip_media_existence_check: true             # 로컬 개발용. 서버에서는 false
+  skip_media_existence_check: true             # 로컬 개발용. 서버 실행 시 false 권장
 
 benchmarks:
   avhbench:
-    qa_json: data/qa/avhbench_qa.json          # 로컬 확보본. 서버에서 OURS 내부 파일로 교체 가능
+    qa_json: data/qa/avhbench_qa.json          # 로컬 확보본 (서버 Dataset/AVH_Bench/QA.json과 동일본 — S1에서 diff 확인)
     val_json: data/qa/avhbench_val.json        # AVCD 논문 validation (205) — 논문 수치 대조용
     test_json: data/qa/avhbench_test.json      # AVCD 논문 test (5,302) — 〃
-    split:
-      status: UNKNOWN_pending_server
-      temp_default: full_qa_excluding_av_tasks # MAD 방식: QA.json에서 task에 'AV' 포함 제외 (3,426)
-      # 근거: Ours(Base)≈MAD 논문 Base 수치 일치 (paper_settings.md §4) → MAD 프로토콜 유력
-      # avcd_val(205)/avcd_test(5302)는 AVCD 논문 수치(81.95/72.15) 대조 시에만 사용
+    split: full_qa_excluding_av_tasks          # 확정 — OURS avh_contam은 V2A/A2V task 전체만 평가
+                                               #   (AV Matching/Captioning 미포함, MAD 프로토콜과 일치)
     tasks_for_overall:                          # MAD score.py 기준
       - Video-driven Audio Hallucination
       - Audio-driven Video Hallucination
+    audio_in_video: true                        # 확정 — mp4에 aac 먹싱. 별도 audios/ 없음
+                                                #   audio-only branch는 mp4에서 추출 (process_audio_from_video)
   cmm:
     qa_json: data/qa/cmm_qa.json
-    categories:
-      status: UNKNOWN_pending_server
-      temp_default: over-reliance_unimodal_priors  # 논문 지표가 V/A/L Dominance = 이 카테고리의
-                                                   # sub_category (docs/paper_settings.md §5). L2에서 데이터 검증
-    audio_from_video_stem: true                # audio = video 경로의 .mp4→.wav
+    categories: over-reliance_unimodal_priors  # 확정 — OURS cmm_contam.py CATEGORY ("CMM standard eval,
+                                               #   3 dominance sub_categories", Language Dom 포함 require_av=False)
+    audio_from_video_stem: true                # audio = video 경로의 .mp4→.wav (annotation의 audio_path 사용)
+    blocklist: data/qa/cmm_blocklist.txt       # 확정 — 디코더 hang 유발 손상 mp4 8건 (OURS와 동일)
+    fixed_dir: _fixed                          # {cmm_media_dir}/_fixed/{id}.mp4 재인코딩본으로 교체
+    load_timeout_s: 60                         # OURS와 동일한 비디오 로드 타임아웃 가드
 
 prompts:
-  # 서버의 OURS 프롬프트로 확정 예정. temp_default는 MAD repo 세팅(ANSWER_QUERY_PROMPT).
+  # 확정 (2026-07-16) — 모델별로 다름! OURS가 "각 모델 자체 eval 프롬프트에 맞춤(baseline comparability)"
+  #   Qwen: probe/config.py ANSWER_QUERY_PROMPT (두 벤치 공통)
+  #   VideoLLaMA2: probe/vl2_contam.py PROMPT_SUFFIX (MAD repo eval_batch.py:75 / eval_batch_cmm.py:107과 일치)
   avhbench_suffix:
-    status: UNKNOWN_pending_server
-    temp_default: " Answer only 'Yes' or 'No'. Do not include any explanation."
-    # repo 내 변형들: " Answer yes or no." / " Answer only 'Yes' or 'No'." / " Only yes/no. No extra text."
+    qwen2_5_omni_7b: " Answer only 'Yes' or 'No'. Do not include any explanation."
+    videollama2_av: " Answer only 'Yes' or 'No'."
   cmm_suffix:
-    status: UNKNOWN_pending_server
-    temp_default: " Answer only 'Yes' or 'No'. Do not include any explanation."
+    qwen2_5_omni_7b: " Answer only 'Yes' or 'No'. Do not include any explanation."
+    videollama2_av: " Only yes/no. No extra text."
   qwen_system_prompt: "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of perceiving auditory and visual inputs, as well as generating text and speech."
   videollama2_system_prompt: ""               # qwen2 backbone은 chat template 기본값 외 없음
   mad_modality_query: "To answer this question, which modality is needed (audio, video, or both): "
@@ -124,9 +122,8 @@ methods:
                                                #   (bf16 통일 원칙의 유일한 예외 — 게이트에서 영향 확인)
 
 scoring:
-  scorer:
-    status: UNKNOWN_pending_server             # OURS 채점기 이식이 최종 목표 (join 시 correct 기준 일치)
-    temp_default: mad_score                    # MAD repo score.py 로직 이식본 (src/score.py)
+  scorer: mad_score                            # 확정 — OURS probe/analysis.py normalize_answer/extract_answer가
+                                               #   MAD score.py 로직과 동일(yes 우선 규칙 포함). 이식본 그대로 사용
   yes_before_no: true                          # MAD extract_answer: yes 패턴 우선
   dedup_key: [video_id, question]
 

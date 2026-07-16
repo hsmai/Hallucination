@@ -48,6 +48,7 @@ class VideoLLaMA2Adapter(ModelAdapter):
         self.cfg = cfg
         self.method = method
         self.name = "videollama2_av"
+        self.model_key = "videollama2_av"
         self.is_avcd = method == "avcd"
 
         backend = AVCD_DIR if self.is_avcd else VANILLA_DIR
@@ -80,16 +81,34 @@ class VideoLLaMA2Adapter(ModelAdapter):
     # ------------------------------------------------------------ 입력 준비
 
     def prepare(self, sample, question_with_suffix: str) -> dict:
-        """미디어 텐서 4-branch 세트 + 질문. (MAD eval_batch_mad.py run_inference 이식)"""
+        """미디어 텐서 4-branch 세트 + 질문.
+
+        오디오 규칙 (2026-07-16 OURS vl2_contam._build_inputs 대조 확정):
+        - AVHBench: mp4에 오디오 먹싱 → VA = process_video(va=True),
+          audio-only branch는 mp4에서 process_audio_from_video(mp4, 0)로 추출
+        - CMM AV: mp4는 무음 + 별도 wav → VA = {video: va=False, audio: process_audio_from_video(wav, 0)}
+          (⚠ va=True를 mp4에 쓰면 무음이 들어가 baseline 붕괴 — 선배가 실측한 함정.
+           process_audio_file(연속 30s)은 오디오가 과강해져 dominance 왜곡 → 사용 금지)
+        - CMM video-only(Language Dom): VA = V (오디오 자체가 없음), 'a' branch는 텍스트 대체
+        """
+        from videollama2.mm_utils import process_audio_from_video
+
         tensors = {"va": None, "v": None, "a": None, "t": None}
+        audio_in_video = bool(sample.extra.get("audio_in_video", False))
         if sample.video_path:
-            tensors["va"] = self.processor["video"](sample.video_path, va=True)
             tensors["v"] = self.processor["video"](sample.video_path, va=False)
-        if sample.audio_path:
-            try:
-                tensors["a"] = self.processor["audio"](sample.audio_path)
-            except FileNotFoundError:
-                tensors["a"] = None
+            if sample.audio_path:                       # CMM AV: 별도 wav
+                audio_t = process_audio_from_video(sample.audio_path, 0)
+                tensors["va"] = {"video": tensors["v"], "audio": audio_t}
+                tensors["a"] = audio_t
+            elif audio_in_video:                        # AVHBench: 먹싱
+                tensors["va"] = self.processor["video"](sample.video_path, va=True)
+                tensors["a"] = process_audio_from_video(sample.video_path, 0)
+            else:                                       # video-only (CMM Language Dom)
+                tensors["va"] = tensors["v"]
+        elif sample.audio_path:                         # audio-only (본 매트릭스엔 없음)
+            tensors["a"] = process_audio_from_video(sample.audio_path, 0)
+
         if tensors["a"] is None and not self._warned_no_audio:
             logger.warning("audio 없음(%s 등) → 'a' branch는 텍스트만으로 대체", sample.sample_id)
             self._warned_no_audio = True

@@ -105,6 +105,11 @@ def load_avhbench(cfg: Config) -> list[Sample]:
             f"(허용: full_qa_excluding_av_tasks | full_qa_all_tasks | avcd_val | avcd_test)"
         )
 
+    # 서버 확정(2026-07-16): AVH_Bench에는 별도 audios/가 없고 mp4에 aac가 먹싱됨.
+    # audio_path=None + extra.audio_in_video=True → 어댑터가 mp4에서 오디오를 얻는다
+    # (Qwen: use_audio_in_video=True / VideoLLaMA2: va=True 또는 process_audio_from_video(mp4)).
+    audio_in_video = bool(cfg.get("benchmarks.avhbench.audio_in_video", True))
+
     samples = []
     for x in raw:
         vid = str(x["video_id"])
@@ -119,10 +124,9 @@ def load_avhbench(cfg: Config) -> list[Sample]:
             category=x["task"],
             question=question,
             ground_truth=gt,
-            # MAD repo 규약: videos/{id}.mp4, audios/{id}.wav
             video_path=_join_prefix(media_dir, f"videos/{vid}.mp4"),
-            audio_path=_join_prefix(media_dir, f"audios/{vid}.wav"),
-            extra={"task": x["task"], "split": split},
+            audio_path=None,
+            extra={"task": x["task"], "split": split, "audio_in_video": audio_in_video},
         ))
     return _finalize(cfg, samples, "AVHBench")
 
@@ -139,6 +143,13 @@ def load_cmm(cfg: Config) -> list[Sample]:
         if not raw:
             raise ValueError(f"CMM category 필터 결과가 0건: {category_filter!r}")
 
+    # 손상 비디오 blocklist (디코더 hang 유발) → _fixed/ 재인코딩본으로 교체 (OURS와 동일 처리)
+    blocklist: set = set()
+    bl_path = cfg.get("benchmarks.cmm.blocklist", None)
+    if bl_path and Path(bl_path).exists():
+        blocklist = {l.strip() for l in Path(bl_path).read_text().splitlines() if l.strip()}
+    fixed_dir = cfg.get("benchmarks.cmm.fixed_dir", "_fixed")
+
     samples = []
     for x in raw:
         vpath = x.get("video_path")
@@ -149,6 +160,8 @@ def load_cmm(cfg: Config) -> list[Sample]:
         if anchor is None:
             raise ValueError(f"CMM 항목에 video/audio 경로가 모두 없음: {x}")
         stem = os.path.splitext(os.path.basename(anchor))[0]
+        if vpath and stem in blocklist:
+            vpath = f"{fixed_dir}/{stem}.mp4"      # 재인코딩본으로 교체
         samples.append(Sample(
             sample_id=f"{stem}::{x['question']}",
             video_id=stem,

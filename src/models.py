@@ -122,7 +122,7 @@ class MockAdapter(ModelAdapter):
         return {
             "sample_id": sample.sample_id,
             "question": question_with_suffix,
-            "has_audio": sample.audio_path is not None,
+            "has_audio": sample.audio_path is not None or bool(sample.extra.get("audio_in_video")),
             "has_video": sample.video_path is not None,
         }
 

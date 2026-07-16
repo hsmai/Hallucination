@@ -18,8 +18,15 @@ class DecodingMethod:
         self.cfg = cfg
         self.benchmark = benchmark
         self.max_new_tokens = cfg.get(f"decoding.max_new_tokens.{benchmark}")
+        # 프롬프트 suffix는 모델별 (2026-07-16 OURS 대조 확정 — 각 모델 자체 eval 프롬프트)
         suffix_key = "prompts.avhbench_suffix" if benchmark == "avhbench" else "prompts.cmm_suffix"
-        self.prompt_suffix = cfg.get(suffix_key)
+        suffix = cfg.get(suffix_key)
+        if isinstance(suffix, dict):
+            model_key = getattr(adapter, "model_key", None)
+            if model_key not in suffix:
+                raise KeyError(f"{suffix_key}에 모델 키 {model_key!r} 없음 (yaml 확인)")
+            suffix = suffix[model_key]
+        self.prompt_suffix = suffix
 
     def question_with_suffix(self, sample) -> str:
         return sample.question + self.prompt_suffix

@@ -30,6 +30,7 @@ class QwenOmniAdapter(ModelAdapter):
         self.cfg = cfg
         self.method = method
         self.name = "qwen2_5_omni_7b"
+        self.model_key = "qwen2_5_omni_7b"
         self.is_avcd = method == "avcd"
 
         model_path = cfg.get("models.qwen2_5_omni_7b.local_path")
@@ -64,12 +65,20 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ 입력 준비
 
     def _conversation(self, ctx: dict, kind: str, text_override: str | None = None):
-        """kind: va|v|a|t|head — MAD qwen-omni/utils.py 의 conversations 구성 이식."""
+        """kind: va|v|a|t|head — MAD qwen-omni/utils.py 구성 + OURS data_loader.to_messages 규칙.
+
+        AV 입력 (2026-07-16 확정):
+        - AVHBench(먹싱): [video, text] + use_audio_in_video=True
+        - CMM AV(별도 wav): [video, audio(wav), text] + use_audio_in_video=False
+        - audio-only branch: audio 소스 = 별도 wav 있으면 wav, 없으면 mp4 트랙 (OURS와 동일)
+        """
         content = []
         if kind in ("va", "v", "head") and ctx["video_path"]:
             content.append({"type": "video", "video": ctx["video_path"]})
-        elif kind == "a" and ctx["audio_path"]:
+        if kind in ("va", "head") and ctx["audio_path"]:      # CMM AV: 별도 wav 블록
             content.append({"type": "audio", "audio": ctx["audio_path"]})
+        if kind == "a" and ctx["audio_src"]:
+            content.append({"type": "audio", "audio": ctx["audio_src"]})
         content.append({"type": "text", "text": text_override or ctx["question"]})
         return [
             {"role": "system", "content": [{"type": "text", "text": self.system_prompt}]},
@@ -89,11 +98,17 @@ class QwenOmniAdapter(ModelAdapter):
                 for k, v in inputs.items()}
 
     def prepare(self, sample, question_with_suffix: str) -> dict:
-        if sample.audio_path is None and not self._warned_no_audio:
+        audio_in_video = bool(sample.extra.get("audio_in_video", False))
+        # uaiv: 오디오가 mp4에 먹싱된 경우에만 True (별도 wav면 separate 블록, OURS resolve와 동일)
+        uaiv = bool(self.use_audio_in_video and sample.video_path
+                    and audio_in_video and not sample.audio_path)
+        audio_src = sample.audio_path or (sample.video_path if audio_in_video else None)
+        if audio_src is None and not self._warned_no_audio:
             logger.warning("audio 없음(%s 등) → 'a' branch는 텍스트만으로 대체", sample.sample_id)
             self._warned_no_audio = True
         return {"sample_id": sample.sample_id, "question": question_with_suffix,
-                "video_path": sample.video_path, "audio_path": sample.audio_path}
+                "video_path": sample.video_path, "audio_path": sample.audio_path,
+                "audio_src": audio_src, "uaiv": uaiv}
 
     def decode_tokens(self, token_ids):
         return self.tokenizer.decode(
@@ -102,7 +117,7 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ base
 
     def greedy_generate(self, ctx: dict, max_new_tokens: int) -> str:
-        uaiv = self.use_audio_in_video and ctx["video_path"] is not None
+        uaiv = ctx["uaiv"]
         inputs = self._inputs(self._conversation(ctx, "va" if ctx["video_path"] else "t"), uaiv)
         with torch.no_grad():
             out = self.model.generate(**inputs, use_audio_in_video=uaiv,
@@ -118,11 +133,11 @@ class QwenOmniAdapter(ModelAdapter):
         kinds = []
         for b in BRANCHES:
             if b == "va":
-                kinds.append(("va", self.use_audio_in_video) if ctx["video_path"] else ("t", False))
+                kinds.append(("va", ctx["uaiv"]) if ctx["video_path"] else ("t", False))
             elif b == "v":
                 kinds.append(("v", False) if ctx["video_path"] else ("t", False))
             elif b == "a":
-                kinds.append(("a", False) if ctx["audio_path"] else ("t", False))
+                kinds.append(("a", False) if ctx["audio_src"] else ("t", False))
             else:
                 kinds.append(("t", False))
         return kinds
@@ -151,7 +166,7 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ MAD
 
     def modality_query_probs(self, ctx: dict, query_prompt: str):
-        uaiv = self.use_audio_in_video and ctx["video_path"] is not None
+        uaiv = ctx["uaiv"]
         conv = self._conversation(ctx, "head", text_override=query_prompt)
         inputs = self._inputs(conv, uaiv)
         with torch.inference_mode():
@@ -166,7 +181,7 @@ class QwenOmniAdapter(ModelAdapter):
     # ------------------------------------------------------------ AVCD (신규 포팅)
 
     def _avcd_inputs(self, ctx: dict, generated_ids):
-        uaiv = self.use_audio_in_video and ctx["video_path"] is not None
+        uaiv = ctx["uaiv"]
         inputs = self._inputs(self._conversation(ctx, "va" if ctx["video_path"] else "t"), uaiv)
         if generated_ids:
             gen = torch.tensor([list(generated_ids)], device=self.model.device, dtype=torch.long)
