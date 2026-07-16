@@ -13,7 +13,9 @@ import pytest
 import torch
 
 pytest.importorskip("transformers")
-from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as m  # noqa: E402
+m = pytest.importorskip(
+    "transformers.models.qwen2_5_omni.modeling_qwen2_5_omni",
+    reason="qwen2_5_omni 미지원 transformers (videollama2 env 등) — skip")
 
 if hasattr(m, "eager_attention_forward") or not hasattr(m, "Qwen2_5OmniAttention"):
     pytest.skip("구식(4.52.x) 클래스 경로가 아님 — 서버 qwen-omni env에서만 실행", allow_module_level=True)

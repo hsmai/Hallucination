@@ -17,6 +17,10 @@ import pytest
 import torch
 
 transformers = pytest.importorskip("transformers")
+_m2 = pytest.importorskip("transformers.models.qwen2.modeling_qwen2")
+if not hasattr(_m2, "eager_attention_forward"):
+    pytest.skip("신식 eager_attention_forward 미지원 transformers(≤4.47, videollama2 env 등) — "
+                "구식 경로는 test_attn_patch_qwen452.py가 담당", allow_module_level=True)
 
 from src.adapters.attn_patch import CTX, install_patch  # noqa: E402
 
