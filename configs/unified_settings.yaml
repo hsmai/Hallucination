@@ -12,7 +12,11 @@
 experiment:
   seed: 42                      # 확정
   dtype: bfloat16               # 확정 (4bit/8bit 양자화 금지)
-  attn_implementation: eager    # 확정 — AVCD가 full attention weight 요구, 전 방법 공통
+  attn_implementation: sdpa     # 확정(2026-07-16 게이트) — 비AVCD 방법용 LLM attention.
+                                # 선배 최종 파이프라인(mixed_sdpa)과 커널 정렬: eager로는 경계선 샘플이
+                                # 뒤집혀 Language Dom 일치율 89%, sdpa로 98% (per-sample 대조 실증).
+                                # AVCD는 attention weight가 필요해 자체 경로 사용(VL2=fork manual eager,
+                                # Qwen=thinker eager 패치) — 이 키의 영향을 받지 않음.
   device: cuda
   single_run: true              # greedy 단일 run
 

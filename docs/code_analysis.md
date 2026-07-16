@@ -230,7 +230,7 @@ entropy(softmax(orig_logits)) < 0.6  →  next = orig_logits  (EAD skip, τ=0.6)
 | AVHBench 프롬프트 suffix | 4가지 혼재 (§1.5 표) | `" Answer yes or no."` | `ANSWER_QUERY_PROMPT` · `UNKNOWN_pending_server` |
 | CMM 지원 | 있음 (category 필터, default는 over-reliance만) | 없음 | category=`UNKNOWN_pending_server` |
 | 채점기 | 정규식 normalize (yes 우선), AV Captioning/Matching은 Overall 제외 | substring 매칭 | MAD `score.py` 이식 · 추후 OURS 채점기 교체 |
-| attention 구현 | flash/sdpa 혼재 | 수동 fp32 eager (필수) | **eager 통일 (확정)** |
+| attention 구현 | flash/sdpa 혼재 | 수동 fp32 eager (필수) | **비AVCD=sdpa 통일**(선배 파이프라인 정렬 — 2026-07-16 게이트 실증), AVCD만 자체 eager 경로 |
 | max_new_tokens | AVHBench 1 / CMM 256~512 | 루프 상한 2048 (yes/no는 사실상 첫 토큰) | `UNKNOWN_pending_server` (임시: AVHBench 1, CMM 16) |
 | 디코딩 | greedy | greedy | greedy temp=0 (확정) |
 | 하이퍼파라미터 | γ=2.5 (sh 기준) | α=2.5(AVH), P=50%, τ=0.6, β=0.2(코드) | γ=2.5, α=2.5/CMM은 그리드, β는 §2.5 참고 |
