@@ -117,6 +117,10 @@ class TestPatchIntegration:
 
 
 def test_qwen25_omni_module_has_patch_target():
-    """실서버 대상 모듈에도 패치 지점이 존재하는지 (버전 호환 조기 경보)."""
+    """실서버 대상 모듈에 패치 지점이 존재하는지 (버전 호환 조기 경보).
+
+    신식(≥4.54: eager_attention_forward 함수) 또는 구식(4.52.x: Attention 클래스)
+    둘 중 하나면 patch_qwen25_omni()가 처리한다.
+    """
     from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as mo
-    assert hasattr(mo, "eager_attention_forward")
+    assert hasattr(mo, "eager_attention_forward") or hasattr(mo, "Qwen2_5OmniAttention")
