@@ -70,6 +70,11 @@ class VideoLLaMA2Adapter(ModelAdapter):
                 model_path, torch_dtype=dtype,
                 attn_implementation=cfg.get("experiment.attn_implementation"))
         self.model.eval()
+        if self.is_avcd:
+            # lm_head 마지막-위치 슬라이스 (Qwen 어댑터와 동일 처방): 전위치 logits
+            # [1,2200,152k]≈0.7GB 제거 — fork 경로의 24GB 경계선 OOM 해소 (수치 무손실)
+            self.model.lm_head.register_forward_pre_hook(
+                self._lm_head_last_hook, with_kwargs=True)
         self.eos_token_id = self.tokenizer.eos_token_id
         self._dtype = torch.float16 if self.is_avcd else (
             torch.bfloat16 if cfg.get("experiment.dtype") == "bfloat16" else torch.float16)
@@ -78,6 +83,18 @@ class VideoLLaMA2Adapter(ModelAdapter):
         from videollama2.constants import DEFAULT_AUDIO_TOKEN, DEFAULT_VIDEO_TOKEN
         self.VIDEO_TOKEN = DEFAULT_VIDEO_TOKEN
         self.AUDIO_TOKEN = DEFAULT_AUDIO_TOKEN
+
+    @staticmethod
+    def _lm_head_last_hook(module, args, kwargs):
+        """hidden [1,N,h] → [1,-1:,h] 슬라이스 (마지막 위치 logits만 필요)."""
+        hs = args[0] if args else kwargs.get("input")
+        if hs is not None and hasattr(hs, "dim") and hs.dim() == 3 and hs.shape[1] > 1:
+            if args:
+                return (hs[:, -1:, :],) + tuple(args[1:]), kwargs
+            k = dict(kwargs)
+            k["input"] = hs[:, -1:, :]
+            return args, k
+        return None
 
     # ------------------------------------------------------------ 입력 준비
 
@@ -234,6 +251,8 @@ class VideoLLaMA2Adapter(ModelAdapter):
 
     def avcd_orig_forward(self, ctx: dict, generated_ids):
         assert self.is_avcd, "avcd 메서드 전용 백엔드가 아닙니다"
+        if not generated_ids:                  # 샘플 경계에서 캐시 정리 (공식 AVCD와 동일)
+            torch.cuda.empty_cache()
         ids = self._avcd_ids(ctx, generated_ids)
         attn = ids.ne(self.tokenizer.pad_token_id).long().cuda()
         images = self._to_device(ctx["tensors"]["va"], "video")
