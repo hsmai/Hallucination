@@ -36,6 +36,9 @@ class AVCDPatchContext:
     num_layers: int = 0                   # thinker text layer 수 (마지막 layer 제외용)
     layer_module_ids: frozenset = frozenset()  # thinker text self_attn 모듈 id 집합
     recorded: Dict[int, torch.Tensor] = field(default_factory=dict)  # layer_idx -> (H, S)
+    # 구식(4.52.x) 경로 head-chunk 설정: 긴 시퀀스에서 [H,N,N] 피크 제한 (24GB 대응, 수치 동일)
+    chunk_seq_threshold: int = 4096
+    head_chunk: int = 4
 
     def reset_records(self):
         self.recorded = {}
@@ -155,25 +158,51 @@ def _legacy_forward_factory(m):
         key_states = m.repeat_kv(key_states, self.num_key_value_groups)
         value_states = m.repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]] \
+            if attention_mask is not None else None
+        scale = 1.0 / math.sqrt(self.head_dim)
+        n_heads = query_states.shape[1]
+        S = key_states.shape[-2]
 
-        if attention_mask is not None:
-            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            attn_weights = attn_weights + causal_mask
+        # head-chunk: 긴 시퀀스에서 [H,N,N] fp32 피크를 제한 (수치 동일 — 3090 24GB 대응).
+        # 짧은 시퀀스는 전 head 한 번에 (오버헤드 없음).
+        chunk = n_heads if (q_len <= CTX.chunk_seq_threshold) else CTX.head_chunk
+        do_inject = CTX.enabled and id(self) in CTX.layer_module_ids
+        layer_idx = getattr(self, "layer_idx", None)
+        rec_rows = []
+        outs = []
+        for h0 in range(0, n_heads, chunk):
+            q = query_states[:, h0:h0 + chunk]
+            k = key_states[:, h0:h0 + chunk]
+            v = value_states[:, h0:h0 + chunk]
+            aw = torch.matmul(q, k.transpose(2, 3)) * scale
+            if causal_mask is not None:
+                aw = aw + causal_mask                      # (1,1,L,S) 브로드캐스트
+            if q.dtype == torch.float16:
+                aw = torch.where(torch.isinf(aw), torch.zeros_like(aw), aw)
+            aw = nn.functional.softmax(aw, dim=-1, dtype=torch.float32).to(q.dtype)
 
-        if query_states.dtype == torch.float16:
-            attn_weights = torch.where(torch.isinf(attn_weights),
-                                       torch.zeros_like(attn_weights), attn_weights)
+            # ==== AVCD 삽입점 (원본과의 유일한 차이) ====
+            if do_inject and q_len > 1 and layer_idx is not None:
+                if CTX.recording:
+                    rec_rows.append(aw[0, :, -1, :].detach().to(torch.float32).cpu())
+                if CTX.span_mask is not None and layer_idx < CTX.num_layers - 1:
+                    if CTX.span_mask.shape[0] != S:
+                        raise RuntimeError(
+                            f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
+                            f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
+                    aw = mask_attention_rows(
+                        aw[0].to(torch.float32),
+                        CTX.span_mask.to(aw.device), CTX.threshold,
+                    ).unsqueeze(0).to(q.dtype)
+            # ============================================
 
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-
-        # ==== AVCD 삽입점 (유일한 변경) ====
-        if CTX.enabled and id(self) in CTX.layer_module_ids:
-            attn_weights = _avcd_inject(self, attn_weights, q_len)
-        # ===================================
-
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        attn_output = torch.matmul(attn_weights, value_states)
+            aw = nn.functional.dropout(aw, p=self.attention_dropout, training=self.training)
+            outs.append(torch.matmul(aw, v))
+            del aw
+        attn_output = torch.cat(outs, dim=1)
+        if do_inject and CTX.recording and rec_rows and layer_idx is not None:
+            CTX.recorded[layer_idx] = torch.cat(rec_rows, dim=0)   # (H, S)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -184,8 +213,7 @@ def _legacy_forward_factory(m):
         attn_output = attn_output.reshape(bsz, q_len, -1)
         attn_output = self.o_proj(attn_output)
 
-        if not output_attentions:
-            attn_weights = None
+        attn_weights = None                    # 기록은 CTX로 — output_attentions 미지원(불필요)
         return attn_output, attn_weights, past_key_value
 
     forward.__avcd_patched__ = True

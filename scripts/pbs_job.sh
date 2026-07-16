@@ -23,6 +23,9 @@
 
 cd "$PBS_O_WORKDIR"
 
+# 긴 시퀀스 대비 allocator 단편화 완화 (3090 24GB)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # conda 초기화 (로그인 셸이 아니므로 명시적으로)
 source ~/.bashrc 2>/dev/null || true
 if ! command -v conda >/dev/null; then

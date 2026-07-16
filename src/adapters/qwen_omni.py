@@ -82,16 +82,24 @@ class QwenOmniAdapter(ModelAdapter):
         self._warned_no_audio = False
 
     def _make_thinker_eager(self):
-        """thinker text decoder attention만 eager로 스왑 (OURS _make_thinker_eager 이식).
+        """thinker text decoder attention 스왑 (OURS _make_thinker_eager/_make_thinker_sdpa 이식).
+
+        - avcd: eager (마스킹·attention 기록 필수 — [H,N,N]은 attn_patch의 head-chunk로 제어)
+        - base/vcd_ext/mad: sdpa (attention weight 불필요, O(N) 메모리 — CMM 긴 클립 OOM 방지.
+          선배 최종 수치도 thinker sdpa(mixed_sdpa) 설정이라 오히려 더 정렬됨. 수치는 커널만
+          다를 뿐 동일 연산 — 2026-07-16 스모크 OOM 대응)
         flash/sdpa attention 클래스는 forward만 override한 순수 서브클래스라 retag가 안전."""
-        from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import Qwen2_5OmniAttention
+        from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import (
+            Qwen2_5OmniAttention, Qwen2_5OmniSdpaAttention)
+        impl = "eager" if self.is_avcd else "sdpa"
+        cls = Qwen2_5OmniAttention if self.is_avcd else Qwen2_5OmniSdpaAttention
         tm = self.model.thinker.model
         for layer in tm.layers:
-            layer.self_attn.__class__ = Qwen2_5OmniAttention
-        tm._attn_implementation = "eager"
-        tm.config._attn_implementation = "eager"
-        logger.info("thinker text attention -> eager (%d layers); encoders는 %s 유지",
-                    len(tm.layers),
+            layer.self_attn.__class__ = cls
+        tm._attn_implementation = impl
+        tm.config._attn_implementation = impl
+        logger.info("thinker text attention -> %s (%d layers); encoders는 %s 유지",
+                    impl, len(tm.layers),
                     self.cfg.get("models.qwen2_5_omni_7b.encoder_attn_implementation",
                                  "flash_attention_2"))
 

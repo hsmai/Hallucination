@@ -376,6 +376,17 @@ def run(args) -> int:
     jsonl_path, meta_path = out_paths(cfg, args.benchmark, args.model, args.method,
                                       args.dry_run, args.out_tag)
     prev_records = load_done_records(jsonl_path)
+    if args.retry_errors:
+        n_err_drop = sum(1 for r in prev_records if str(r.get("prediction", "")).startswith("ERROR:"))
+        if n_err_drop:
+            prev_records = [r for r in prev_records
+                            if not str(r.get("prediction", "")).startswith("ERROR:")]
+            tmp = jsonl_path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in prev_records:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            tmp.replace(jsonl_path)
+            logger.info("--retry-errors: ERROR 기록 %d건 제거 후 재시도", n_err_drop)
     done = {r["sample_id"] for r in prev_records if "sample_id" in r}
     todo = [s for s in samples if s.sample_id not in done]
     logger.info("[%s×%s×%s] 전체 %d, 완료 %d, 남음 %d → %s",
@@ -452,6 +463,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-tag", default="", help="출력 파일 구분 태그 — 재생성 실행 시 본 결과와 분리 (예: regen256)")
     p.add_argument("--set", action="append", default=[],
                    help="설정 오버라이드 dotted.key=value (반복 가능) — 게이트 α그리드/β판정/경로분리용")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="기존 결과의 ERROR 샘플을 제거하고 재시도 (OOM 등 수정 후 재실행용)")
     p.add_argument("--log-interval", type=int, default=50,
                    help="N샘플마다 한 줄 상태(누적acc·예측분포·internals 요약) 출력")
     return p
