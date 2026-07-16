@@ -1,8 +1,9 @@
 """VideoLLaMA2-AV 실모델 어댑터 (서버 전용 — 로컬 import 금지: 제약 1).
 
 백엔드 선택 (method별):
-- base / vcd_ext / mad : third_party/VideoLLaMA2 (vanilla, audio_visual 브랜치)
-  + attn_implementation="eager", bf16. branch/query 로직은 MAD repo에서 이식(우리 코드).
+- base / vcd_ext / mad : third_party/MAD/VideoLLaMA2 (MAD 공식 fork — 선배 vl2_contam과 동일 백엔드)
+  + attn_implementation="eager", bf16. vanilla 로더는 torch_dtype을 fp16으로 강제 덮어쓰는
+  버그가 있어 MAD fork(전달값 존중)를 사용 (2026-07-16 스모크에서 확인).
 - avcd                 : third_party/AVCD (공식 fork, 무수정 사용)
   fork의 model.forward가 (outputs, avg_dominance, threshold)를 반환하고 modality/threshold
   kwarg로 마스킹을 수행 — 공식 구현 그대로가 가장 충실한 재현.
@@ -25,7 +26,7 @@ from ..models import BRANCHES, ModelAdapter
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-VANILLA_DIR = REPO_ROOT / "third_party" / "VideoLLaMA2"
+VANILLA_DIR = REPO_ROOT / "third_party" / "MAD" / "VideoLLaMA2"   # MAD fork (선배와 동일 백엔드)
 AVCD_DIR = REPO_ROOT / "third_party" / "AVCD"
 
 
