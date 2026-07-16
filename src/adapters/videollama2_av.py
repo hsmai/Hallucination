@@ -61,6 +61,7 @@ class VideoLLaMA2Adapter(ModelAdapter):
             model_path = cfg.get("models.videollama2_av.hf_id")
 
         if self.is_avcd:
+            self._patch_fork_attn_memory()
             # 공식 fork 재현: fp16 (fork 내부 하드코딩), fork 자체가 manual eager attention
             self.model, self.processor, self.tokenizer = vl.model_init(
                 model_path, torch_dtype=torch.float16)
@@ -83,6 +84,31 @@ class VideoLLaMA2Adapter(ModelAdapter):
         from videollama2.constants import DEFAULT_AUDIO_TOKEN, DEFAULT_VIDEO_TOKEN
         self.VIDEO_TOKEN = DEFAULT_VIDEO_TOKEN
         self.AUDIO_TOKEN = DEFAULT_AUDIO_TOKEN
+
+    @staticmethod
+    def _patch_fork_attn_memory():
+        """AVCD fork 메모리 릭 수정 (fork 무수정 — 런타임 래핑, 수치 동일).
+
+        fork의 Qwen2SdpaAttention.forward는 orig forward에서 last_query를
+        attn_weight의 **view**로 반환 → 542MB짜리 전체 attention 행렬이 layer마다
+        생존해 28층 누적 ~15GB (48GB A6000에선 무증상, 3090 24GB에서 OOM —
+        2026-07-16 스모크 실측). view를 clone으로 바꿔 원 행렬을 즉시 해제한다.
+        """
+        from videollama2.model import qwen as fork_qwen
+        cls = fork_qwen.Qwen2SdpaAttention
+        if getattr(cls.forward, "__avcd_leakfix__", False):
+            return
+        orig = cls.forward
+
+        def forward(self, *a, **k):
+            out = orig(self, *a, **k)
+            if isinstance(out, tuple) and len(out) == 4 and isinstance(out[3], list):
+                out = (*out[:3], [t.detach().clone() for t in out[3]])
+            return out
+
+        forward.__avcd_leakfix__ = True
+        cls.forward = forward
+        logger.info("AVCD fork attention 메모리 릭 패치 적용 (view→clone)")
 
     @staticmethod
     def _lm_head_last_hook(module, args, kwargs):
