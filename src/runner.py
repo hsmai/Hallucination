@@ -369,10 +369,6 @@ def run(args) -> int:
         else:
             cfg._resolved["decoding"]["max_new_tokens"][args.benchmark] = args.max_new_tokens
 
-    adapter = load_adapter(args.model, cfg, dry_run=args.dry_run, method=args.method)
-    method = get_method(args.method)
-    method.setup(adapter, cfg, args.benchmark)
-
     jsonl_path, meta_path = out_paths(cfg, args.benchmark, args.model, args.method,
                                       args.dry_run, args.out_tag)
     prev_records = load_done_records(jsonl_path)
@@ -397,6 +393,11 @@ def run(args) -> int:
     if not todo:
         logger.info("처리할 샘플 없음 (모두 완료).")
         return 0
+
+    # 모델 로드는 처리할 샘플이 있을 때만 (재실행 skip 시 2~3분 로드 낭비 방지)
+    adapter = load_adapter(args.model, cfg, dry_run=args.dry_run, method=args.method)
+    method = get_method(args.method)
+    method.setup(adapter, cfg, args.benchmark)
 
     monitor = RunMonitor(cfg, args, n_todo=len(todo), jsonl_path=jsonl_path)
     monitor.seed_from_records(prev_records)   # 재개 시 누적 지표가 전체 기준이 되도록
