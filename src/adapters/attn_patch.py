@@ -202,8 +202,11 @@ def patch_qwen25_omni(model) -> AVCDPatchContext:
     import transformers
     from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as m
 
-    assert model.config._attn_implementation == "eager", (
-        "AVCD는 attn_implementation='eager' 로드가 필수입니다")
+    # mixed 로드(인코더 flash + thinker eager 스왑)를 허용 — thinker text 기준으로만 검사
+    thinker_impl = getattr(model.thinker.model.config, "_attn_implementation", None)
+    assert thinker_impl == "eager", (
+        f"AVCD는 thinker text attention이 eager여야 합니다 (현재: {thinker_impl}) — "
+        "어댑터의 _make_thinker_eager 적용 여부 확인")
     layers = model.thinker.model.layers
 
     if hasattr(m, "eager_attention_forward"):

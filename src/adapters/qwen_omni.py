@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 class QwenOmniAdapter(ModelAdapter):
     def __init__(self, cfg, method: str):
-        from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor
+        from transformers import (Qwen2_5OmniConfig,
+                                  Qwen2_5OmniForConditionalGeneration,
+                                  Qwen2_5OmniProcessor)
 
         self.cfg = cfg
         self.method = method
@@ -37,13 +39,30 @@ class QwenOmniAdapter(ModelAdapter):
         if not model_path or "UNKNOWN" in str(model_path):
             model_path = cfg.get("models.qwen2_5_omni_7b.hf_id")
 
+        # ---- 로드 방식: OURS probe/model_loader.py 이식 (2026-07-16) ----
+        # 1) transformers>=4.52 + torch<2.6 조합에서 from_pretrained가 talker speaker
+        #    dict(torch.load)를 막음(CVE 체크) → 신뢰된 로컬 체크포인트이므로 우회 (OURS 동일)
+        try:
+            import transformers.models.qwen2_5_omni.modeling_qwen2_5_omni as _omni_mod
+            _omni_mod.check_torch_load_is_safe = lambda *a, **k: None
+        except Exception as e:
+            logger.warning("check_torch_load_is_safe 우회 실패: %s", e)
+        # 2) talker를 아예 생성하지 않음 (~5GB 절약 — 3090 24GB 대응)
+        model_cfg = Qwen2_5OmniConfig.from_pretrained(model_path)
+        if hasattr(model_cfg, "enable_audio_output"):
+            model_cfg.enable_audio_output = False
+        # 3) "mixed": 인코더(vision/audio)는 flash로 로드(OOM 방지, OURS 분석 모드와 동일),
+        #    thinker text attention만 eager로 스왑 → 전 방법 동일 numerics + AVCD 패치 가능
         dtype = torch.bfloat16 if cfg.get("experiment.dtype") == "bfloat16" else torch.float16
+        encoder_impl = cfg.get("models.qwen2_5_omni_7b.encoder_attn_implementation",
+                               "flash_attention_2")
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=dtype, device_map="cuda",
-            attn_implementation=cfg.get("experiment.attn_implementation"))  # 전 방법 eager 통일
+            model_path, config=model_cfg, torch_dtype=dtype, device_map="cuda",
+            attn_implementation=encoder_impl)
+        self._make_thinker_eager()
         self.processor = Qwen2_5OmniProcessor.from_pretrained(model_path)
-        if cfg.get("models.qwen2_5_omni_7b.disable_talker", True):
-            self.model.disable_talker()
+        if cfg.get("models.qwen2_5_omni_7b.disable_talker", True) and hasattr(self.model, "disable_talker"):
+            self.model.disable_talker()   # 미생성 시 no-op
         self.model.eval()
 
         self.tokenizer = self.processor.tokenizer
@@ -61,6 +80,20 @@ class QwenOmniAdapter(ModelAdapter):
                 "thinker_config에서 audio/video token index를 찾지 못함 — "
                 "S1에서 config 구조 확인 필요")
         self._warned_no_audio = False
+
+    def _make_thinker_eager(self):
+        """thinker text decoder attention만 eager로 스왑 (OURS _make_thinker_eager 이식).
+        flash/sdpa attention 클래스는 forward만 override한 순수 서브클래스라 retag가 안전."""
+        from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import Qwen2_5OmniAttention
+        tm = self.model.thinker.model
+        for layer in tm.layers:
+            layer.self_attn.__class__ = Qwen2_5OmniAttention
+        tm._attn_implementation = "eager"
+        tm.config._attn_implementation = "eager"
+        logger.info("thinker text attention -> eager (%d layers); encoders는 %s 유지",
+                    len(tm.layers),
+                    self.cfg.get("models.qwen2_5_omni_7b.encoder_attn_implementation",
+                                 "flash_attention_2"))
 
     # ------------------------------------------------------------ 입력 준비
 

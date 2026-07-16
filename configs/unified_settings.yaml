@@ -38,6 +38,9 @@ models:
     hf_id: Qwen/Qwen2.5-Omni-7B               # 7B 고정 (MAD sh의 3B 예시 사용 금지)
     local_path: /home3/t202401082/.cache/huggingface/hub/models--Qwen--Qwen2.5-Omni-7B/snapshots/ae9e1690543ffd5c0221dc27f79834d0294cba00  # 확정 — 선배 HF 캐시
     disable_talker: true
+    encoder_attn_implementation: flash_attention_2  # 확정 — OURS "mixed" 방식: 인코더 flash(OOM 방지)
+                                                    # + thinker text만 eager 스왑 (전 방법 동일, AVCD 패치 대상)
+                                                    # talker는 enable_audio_output=False로 아예 미생성 (24GB 대응)
     use_audio_in_video: true                  # AVHBench: mp4에 오디오 먹싱됨(muxed). CMM은 별도 wav→separate
 
 paths:
