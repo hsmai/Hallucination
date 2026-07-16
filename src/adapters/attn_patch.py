@@ -64,22 +64,7 @@ def _wrapped_eager(orig_fn):
             attn_weights = attn_weights + attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32)
 
-        layer_idx = getattr(module, "layer_idx", None)
-        q_len = attn_weights.shape[-2]
-
-        if q_len > 1:  # prefill(전체 시퀀스)에서만 기록/마스킹 (공식 AVCD와 동일 조건)
-            if CTX.recording and layer_idx is not None:
-                CTX.recorded[layer_idx] = attn_weights[0, :, -1, :].detach().to(torch.float32).cpu()
-            if (CTX.span_mask is not None and layer_idx is not None
-                    and layer_idx < CTX.num_layers - 1):        # 마지막 layer 제외
-                S = attn_weights.shape[-1]
-                if CTX.span_mask.shape[0] != S:
-                    raise RuntimeError(
-                        f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
-                        f"span 계산이 실제 시퀀스와 어긋남 (S1에서 점검)")
-                attn_weights = mask_attention_rows(
-                    attn_weights[0], CTX.span_mask.to(attn_weights.device), CTX.threshold
-                ).unsqueeze(0)
+        attn_weights = _avcd_inject(module, attn_weights, attn_weights.shape[-2])
 
         attn_weights = attn_weights.to(query.dtype)
         attn_weights = torch.nn.functional.dropout(attn_weights, p=dropout, training=module.training)
@@ -114,11 +99,127 @@ def install_patch(modeling_module, layer_self_attns) -> AVCDPatchContext:
     return CTX
 
 
+def _avcd_inject(self_attn, attn_weights: torch.Tensor, q_len: int) -> torch.Tensor:
+    """softmax 직후 삽입점 — 기록/마스킹 공통 로직 (신식·구식 경로가 공유)."""
+    layer_idx = getattr(self_attn, "layer_idx", None)
+    if q_len <= 1 or layer_idx is None:
+        return attn_weights
+    if CTX.recording:
+        CTX.recorded[layer_idx] = attn_weights[0, :, -1, :].detach().to(torch.float32).cpu()
+    if CTX.span_mask is not None and layer_idx < CTX.num_layers - 1:  # 마지막 layer 제외
+        S = attn_weights.shape[-1]
+        if CTX.span_mask.shape[0] != S:
+            raise RuntimeError(
+                f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
+                f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
+        dtype = attn_weights.dtype
+        attn_weights = mask_attention_rows(
+            attn_weights[0].to(torch.float32),
+            CTX.span_mask.to(attn_weights.device), CTX.threshold,
+        ).unsqueeze(0).to(dtype)
+    return attn_weights
+
+
+def _legacy_forward_factory(m):
+    """transformers 4.52.x 구식 Qwen2_5OmniAttention.forward 교체본.
+
+    본체는 서버 설치본(4.52.3) 소스의 **verbatim 복사**이며, softmax 직후
+    _avcd_inject() 한 줄만 삽입한다 (CTX 비활성 시 원본과 동일 동작).
+    """
+    import math
+    from torch import nn
+
+    def forward(self, hidden_states, attention_mask=None, position_ids=None,
+                past_key_value=None, output_attentions=False, use_cache=False,
+                cache_position=None, position_embeddings=None):
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        query_states = query_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, -1, self.head_dim).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        query_states, key_states = m.apply_multimodal_rotary_pos_emb(
+            query_states, key_states, cos, sin, self.rope_scaling["mrope_section"]
+        )
+
+        if past_key_value is not None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs)
+
+        key_states = m.repeat_kv(key_states, self.num_key_value_groups)
+        value_states = m.repeat_kv(value_states, self.num_key_value_groups)
+
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+        if attention_mask is not None:
+            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+            attn_weights = attn_weights + causal_mask
+
+        if query_states.dtype == torch.float16:
+            attn_weights = torch.where(torch.isinf(attn_weights),
+                                       torch.zeros_like(attn_weights), attn_weights)
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+
+        # ==== AVCD 삽입점 (유일한 변경) ====
+        if CTX.enabled and id(self) in CTX.layer_module_ids:
+            attn_weights = _avcd_inject(self, attn_weights, q_len)
+        # ===================================
+
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                f" {attn_output.size()}")
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, -1)
+        attn_output = self.o_proj(attn_output)
+
+        if not output_attentions:
+            attn_weights = None
+        return attn_output, attn_weights, past_key_value
+
+    forward.__avcd_patched__ = True
+    return forward
+
+
 def patch_qwen25_omni(model) -> AVCDPatchContext:
-    """Qwen2.5-Omni 모델의 thinker text decoder에 AVCD 패치 적용. 반환된 CTX로 제어."""
+    """Qwen2.5-Omni thinker text decoder에 AVCD 패치 적용. 반환된 CTX로 제어.
+
+    transformers 버전에 따라 두 경로 중 하나를 자동 선택:
+    - 신식 (≥4.54 계열, 로컬 4.57.6 검증): 모듈 함수 eager_attention_forward 래핑
+    - 구식 (서버 4.52.3 검증): Qwen2_5OmniAttention.forward 클래스 교체 (verbatim+삽입)
+    """
+    import transformers
     from transformers.models.qwen2_5_omni import modeling_qwen2_5_omni as m
 
     assert model.config._attn_implementation == "eager", (
         "AVCD는 attn_implementation='eager' 로드가 필수입니다")
     layers = model.thinker.model.layers
-    return install_patch(m, [l.self_attn for l in layers])
+
+    if hasattr(m, "eager_attention_forward"):
+        return install_patch(m, [l.self_attn for l in layers])
+
+    # 구식 경로 (4.52.x)
+    assert hasattr(m, "Qwen2_5OmniAttention"), (
+        f"transformers {transformers.__version__}: 신식 함수도 구식 클래스도 없음 — "
+        "runbook T4 절차로 패치 지점 재확인 필요")
+    attn_cls = m.Qwen2_5OmniAttention
+    for l in layers:
+        assert isinstance(l.self_attn, attn_cls), (
+            f"thinker layer attention이 {type(l.self_attn).__name__} — eager 로드 확인 필요")
+    CTX.layer_module_ids = frozenset(id(l.self_attn) for l in layers)
+    CTX.num_layers = len(layers)
+    if not getattr(attn_cls.forward, "__avcd_patched__", False):
+        attn_cls.forward = _legacy_forward_factory(m)
+        logger.info("Qwen2.5-Omni(구식 4.52.x) attention 클래스 패치 완료 (%d layers)", CTX.num_layers)
+    return CTX
