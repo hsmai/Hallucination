@@ -96,10 +96,9 @@ methods:
 
   vcd_ext:
     # MAD 논문 Eq.10 계수: [1+3α, -α, -α, -α] over [VA, V, A, T]  (확정)
-    alpha:
-      status: UNKNOWN_pending_server           # 논문·코드 모두 값 미명시 (mm_default_cd default 0.5)
-      temp_default: 0.5
-      gate_candidates: [0.5, 2.5]              # 게이트에서 MAD 논문 Table 1 VCD-ext 행과 대조하여 확정
+    alpha: 0.5                                 # 확정 (2026-07-17 게이트 대조): α=2.5는 전 조합 붕괴
+                                               #   (VL2 CMM 15.5% 등), α=0.5가 논문 거동(-7/-3 완만한 하락)과
+                                               #   부합 + repo mm_default_cd 기본값 일치. 근거: logs/gateC_*
     branch_mode: modality_ablation             # 잠정 — MAD 논문 Eq.7·Eq.10 근거 (paper_settings.md §1·§5).
                                                # 서버 OURS 확인 후 최종. (diffusion_noise는 AVCD repo VCD 전용)
 
