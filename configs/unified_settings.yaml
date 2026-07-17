@@ -112,10 +112,10 @@ methods:
   avcd:
     alpha:
       avhbench: 2.5                            # 확정 (논문·inference_AVH_*.py)
-      cmm:
-        status: UNKNOWN_pending_server         # 논문에 없음 → 서버 게이트에서 그리드 탐색 후 확정
-        temp_default: 0.5
-        grid_search: {min: 0.5, max: 3.0, step: 0.5, n_samples: 100}
+      cmm:                                     # 확정 (2026-07-17 게이트 그리드 0.5~3.0, 균형 200샘플):
+        videollama2_av: 2.5                    #   VL2: 단조 피크 75.0% @2.5
+        qwen2_5_omni_7b: 0.5                   #   Qwen: 최고 79.56% @0.5 (논문의 '기타 데이터셋 0.5'와 일치)
+                                               #   근거 로그: logs/gate_alpha_grid.log
     masking_top_p: 0.5                         # 확정 (논문 P=50%, 코드 quantile 0.5)
     exclude_last_layer: true                   # 확정 — 마스킹·dominance 모두 마지막 layer 제외
     ead_tau: 0.6                               # 확정 (논문·코드 일치)
@@ -123,7 +123,8 @@ methods:
                                                #   → 게이트에서 AVH val 81.95 재현되는 쪽으로 확정
     plausibility_beta_paper: 0.1               # 논문 모드용
     implausible_fill: -1.0e-4                  # ⚠ 코드 그대로(-inf 아님). faithful 재현용
-    faithful_mode: true                        # true: 코드 특이점 그대로 / false: 논문 서술 기준(-inf, β=0.1)
+    faithful_mode: true                        # 확정 (2026-07-17 게이트 β판정: AVH val에서 두 모드 완전 동률
+                                               #   84.66% — yes/no 1토큰 평가에선 무차이 → 코드 재현값 유지)
     videollama2_backend: official_fork         # AVCD×VideoLLaMA2는 공식 fork(third_party/AVCD) 사용
     videollama2_dtype: float16                 # ⚠ fork 내부 fp16 캐스팅 하드코딩 → 이 run만 fp16
                                                #   (bf16 통일 원칙의 유일한 예외 — 게이트에서 영향 확인)

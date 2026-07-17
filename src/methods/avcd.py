@@ -30,7 +30,10 @@ class AVCD(DecodingMethod):
 
     def setup(self, adapter, cfg, benchmark):
         super().setup(adapter, cfg, benchmark)
-        self.alpha = float(cfg.get(f"methods.avcd.alpha.{benchmark}"))
+        alpha = cfg.get(f"methods.avcd.alpha.{benchmark}")
+        if isinstance(alpha, dict):               # 모델별 확정값 (게이트 그리드 결과)
+            alpha = alpha[getattr(adapter, "model_key", None)]
+        self.alpha = float(alpha)
         self.tau = float(cfg.get("methods.avcd.ead_tau"))
         faithful = bool(cfg.get("methods.avcd.faithful_mode"))
         if faithful:

@@ -292,6 +292,8 @@ class QwenOmniAdapter(ModelAdapter):
         return qwen_spans(input_ids_row.tolist(), self.audio_token_id, self.video_token_id)
 
     def avcd_orig_forward(self, ctx: dict, generated_ids):
+        if not generated_ids:                  # 샘플 경계 캐시 정리 (긴 클립 OOM 여유 확보)
+            torch.cuda.empty_cache()
         inputs, uaiv = self._avcd_inputs(ctx, generated_ids)
         self.patch_ctx.enabled = True
         self.patch_ctx.recording = True

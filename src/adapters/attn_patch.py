@@ -37,8 +37,9 @@ class AVCDPatchContext:
     layer_module_ids: frozenset = frozenset()  # thinker text self_attn 모듈 id 집합
     recorded: Dict[int, torch.Tensor] = field(default_factory=dict)  # layer_idx -> (H, S)
     # 구식(4.52.x) 경로 head-chunk 설정: 긴 시퀀스에서 [H,N,N] 피크 제한 (24GB 대응, 수치 동일)
+    # 2026-07-17 게이트: chunk=4로도 CMM 최장 클립 OOM(19/200) → 1로 하향 (피크 ~1.2GB)
     chunk_seq_threshold: int = 4096
-    head_chunk: int = 4
+    head_chunk: int = 1
 
     def reset_records(self):
         self.recorded = {}
