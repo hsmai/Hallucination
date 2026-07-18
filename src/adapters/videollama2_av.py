@@ -268,6 +268,68 @@ class VideoLLaMA2Adapter(ModelAdapter):
         p = torch.softmax(torch.stack(z), dim=0).tolist()
         return p[0], p[1], p[2]
 
+    # ------------------------------------------------------------ Ours 스티어링 (feat/ours-steer)
+
+    def steer_prepare(self, ctx: dict, layer: int) -> dict:
+        """스티어링 컨텍스트 — 확장 후 좌표 기준 (placeholder가 임베딩 2,172개로 치환됨).
+
+        span: [head | video 676 | audio 1496 | text] (선배 vl2_contam·AVCD fork와 동일 상수,
+        yaml expected_*와 대조). VA 텐서가 dict가 아니면(video-only) audio span 없음."""
+        t = ctx["tensors"]
+        ids = self._prompt_ids(f"{self.VIDEO_TOKEN}\n{ctx['question']}", self.VIDEO_TOKEN) \
+            if t["va"] is not None else self._prompt_ids(ctx["question"], None)
+        n_video = int(self.cfg.get("models.videollama2_av.expected_video_tokens"))
+        n_audio_full = int(self.cfg.get("models.videollama2_av.expected_audio_tokens"))
+        raw = ids[0].tolist()
+        video_idx, audio_idx = [], []
+        if t["va"] is not None:
+            head = raw.index(min(raw))  # placeholder = 음수 id (MODAL_INDEX_MAP)
+            has_audio = isinstance(t["va"], dict) and "audio" in (t["va"] or {})
+            n_audio = n_audio_full if has_audio else 0
+            expanded_len = len(raw) - 1 + n_video + n_audio
+            video_idx = list(range(head, head + n_video))
+            audio_idx = list(range(head + n_video, head + n_video + n_audio))
+            text_idx = list(range(head + n_video + n_audio, expanded_len))
+        else:
+            expanded_len = len(raw)
+            text_idx = list(range(expanded_len))
+        layers = self.model.model.layers
+        return {"input_ids": ids, "seq_len": expanded_len,
+                "video_idx": video_idx, "audio_idx": audio_idx, "text_idx": text_idx,
+                "ans": expanded_len - 1, "layer": layer, "layers": layers,
+                "attn_modules": [l.self_attn for l in layers],
+                "images": self._to_device(t["va"], "video") if t["va"] is not None else None}
+
+    def _steer_run(self, sp: dict, extra_hooks) -> torch.Tensor:
+        handles = []
+        attn = sp["input_ids"].ne(self.tokenizer.pad_token_id).long().cuda()
+        try:
+            for target, hook in extra_hooks:
+                handles.append(target.register_forward_pre_hook(hook, with_kwargs=True))
+            with torch.inference_mode():
+                out = self.model(sp["input_ids"], attention_mask=attn, images=sp["images"],
+                                 use_cache=False, pad_token_id=self.eos_token_id)
+                out = out[0] if isinstance(out, tuple) else out
+            return out.logits[0, -1, :].float().cpu()
+        finally:
+            for h in handles:
+                h.remove()
+
+    def steer_forward(self, ctx: dict, sp: dict, mask_keys=None):
+        from .steer_ops import make_capture_hook, make_mask_hook
+        store = {}
+        hooks = [(sp["layers"][sp["layer"]], make_capture_hook(store, sp["ans"]))]
+        if mask_keys:
+            mh = make_mask_hook(list(range(sp["seq_len"])), mask_keys, 0.0)
+            hooks += [(m, mh) for m in sp["attn_modules"]]
+        logits = self._steer_run(sp, hooks)
+        return logits, store["h"]
+
+    def steer_predict(self, ctx: dict, sp: dict, vec: torch.Tensor) -> torch.Tensor:
+        from .steer_ops import make_inject_hook
+        return self._steer_run(
+            sp, [(sp["layers"][sp["layer"]], make_inject_hook(vec, [sp["ans"]]))])
+
     # ------------------------------------------------------------ AVCD (공식 fork 위임)
 
     def _avcd_ids(self, ctx: dict, generated_ids):

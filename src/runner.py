@@ -32,7 +32,7 @@ from pathlib import Path
 
 from .config import load_config
 from .data import AVH_TASK_ADVH, AVH_TASK_VDAH, load_benchmark
-from .methods import METHOD_NAMES, get_method
+from .methods import ALL_METHODS, get_method
 from .models import load_adapter
 from .score import mad_is_correct, extract_answer, normalize_answer
 
@@ -454,7 +454,7 @@ def run(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="비교군 실험 러너")
     p.add_argument("--model", required=True, help="yaml models.* 키")
-    p.add_argument("--method", required=True, choices=METHOD_NAMES)
+    p.add_argument("--method", required=True, choices=ALL_METHODS)
     p.add_argument("--benchmark", required=True, choices=("avhbench", "cmm"))
     p.add_argument("--config", default=None, help="기본: configs/unified_settings.yaml")
     p.add_argument("--dry-run", action="store_true", help="MockModel로 배관 검증 (로컬)")

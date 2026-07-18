@@ -128,6 +128,13 @@ methods:
     videollama2_dtype: float16                 # ⚠ fork 내부 fp16 캐스팅 하드코딩 → 이 run만 fp16
                                                #   (bf16 통일 원칙의 유일한 예외 — 게이트에서 영향 확인)
 
+  # feat/ours-steer — Ours(Omni-Steering) + Language Dom 개선 분기 (선배 frozen 세팅 기반)
+  ours_steer:
+    layer: 22                                  # 선배 frozen (L22)
+    alpha: 1.0                                 # 지각-오염 차감 강도 (선배 frozen)
+    beta: 1.0                                  # 증거 증폭 강도 — β 스윕({0.5,1.0,2.0})으로 확정 예정
+    lang_mode: amplify                         # amplify(제안) | text_subtract(현행 재현·대조용)
+
 scoring:
   scorer: mad_score                            # 확정 — OURS probe/analysis.py normalize_answer/extract_answer가
                                                #   MAD score.py 로직과 동일(yes 우선 규칙 포함). 이식본 그대로 사용

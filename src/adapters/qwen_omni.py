@@ -74,15 +74,14 @@ class QwenOmniAdapter(ModelAdapter):
         self.system_prompt = cfg.get("prompts.qwen_system_prompt")
         self.use_audio_in_video = cfg.get("models.qwen2_5_omni_7b.use_audio_in_video", True)
 
+        tc = self.model.config.thinker_config
+        self.audio_token_id = getattr(tc, "audio_token_index", None)
+        self.video_token_id = getattr(tc, "video_token_index", None)
+        assert self.audio_token_id is not None and self.video_token_id is not None, (
+            "thinker_config에서 audio/video token index를 찾지 못함")
         if self.is_avcd:
             from .attn_patch import patch_qwen25_omni
             self.patch_ctx = patch_qwen25_omni(self.model)
-            tc = self.model.config.thinker_config
-            self.audio_token_id = getattr(tc, "audio_token_index", None)
-            self.video_token_id = getattr(tc, "video_token_index", None)
-            assert self.audio_token_id is not None and self.video_token_id is not None, (
-                "thinker_config에서 audio/video token index를 찾지 못함 — "
-                "S1에서 config 구조 확인 필요")
         self._warned_no_audio = False
 
     @staticmethod
@@ -290,6 +289,62 @@ class QwenOmniAdapter(ModelAdapter):
 
     def _spans_for(self, input_ids_row: torch.Tensor):
         return qwen_spans(input_ids_row.tolist(), self.audio_token_id, self.video_token_id)
+
+    # ------------------------------------------------------------ Ours 스티어링 (feat/ours-steer)
+
+    def steer_prepare(self, ctx: dict, layer: int) -> dict:
+        """스티어링용 컨텍스트: 입력 1회 구성 + modality 인덱스 + layer 핸들."""
+        from .common import qwen_spans
+        inputs, uaiv = self._inputs_kind(ctx, "va" if ctx["video_path"] else "t")
+        ids = inputs["input_ids"][0]
+        spans = qwen_spans(ids.tolist(), self.audio_token_id, self.video_token_id) \
+            if (ids == self.video_token_id).any() or (ids == self.audio_token_id).any() \
+            else {"video": torch.zeros(len(ids), dtype=torch.bool),
+                  "audio": torch.zeros(len(ids), dtype=torch.bool),
+                  "language": torch.ones(len(ids), dtype=torch.bool)}
+        seq_len = ids.shape[0]
+        layers = self.model.thinker.model.layers
+        return {
+            "inputs": inputs, "uaiv": uaiv, "seq_len": seq_len,
+            "video_idx": torch.nonzero(spans["video"]).squeeze(-1).tolist(),
+            "audio_idx": torch.nonzero(spans["audio"]).squeeze(-1).tolist(),
+            "text_idx": torch.nonzero(spans["language"]).squeeze(-1).tolist(),
+            "ans": seq_len - 1, "layer": layer, "layers": layers,
+            "attn_modules": [l.self_attn for l in layers],
+        }
+
+    def _steer_run(self, sp: dict, extra_hooks) -> torch.Tensor:
+        handles = []
+        try:
+            for target, hook in extra_hooks:
+                handles.append(target.register_forward_pre_hook(hook, with_kwargs=True))
+            with torch.inference_mode():
+                out = self.model.thinker(**sp["inputs"], use_audio_in_video=sp["uaiv"],
+                                         use_cache=False, output_attentions=False,
+                                         return_dict=True)
+            return out.logits[0, -1, :].float().cpu()
+        finally:
+            for h in handles:
+                h.remove()
+
+    def steer_forward(self, ctx: dict, sp: dict, mask_keys=None):
+        """(마지막 logits, layer 입력 hidden@ans). mask_keys 지정 시 전 layer에서
+        모든 query가 해당 key들을 못 보게 additive -inf (선배 방식 그대로)."""
+        from .steer_ops import make_capture_hook, make_mask_hook
+        store = {}
+        hooks = [(sp["layers"][sp["layer"]], make_capture_hook(store, sp["ans"]))]
+        if mask_keys:
+            mh = make_mask_hook(list(range(sp["seq_len"])), mask_keys, 0.0)
+            hooks += [(m, mh) for m in sp["attn_modules"]]
+        logits = self._steer_run(sp, hooks)
+        return logits, store["h"]
+
+    def steer_predict(self, ctx: dict, sp: dict, vec: torch.Tensor) -> torch.Tensor:
+        from .steer_ops import make_inject_hook
+        return self._steer_run(
+            sp, [(sp["layers"][sp["layer"]], make_inject_hook(vec, [sp["ans"]]))])
+
+    # ------------------------------------------------------------ AVCD
 
     def avcd_orig_forward(self, ctx: dict, generated_ids):
         if not generated_ids:                  # 샘플 경계 캐시 정리 (긴 클립 OOM 여유 확보)

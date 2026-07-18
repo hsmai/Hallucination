@@ -40,16 +40,19 @@ def get_method(name: str) -> DecodingMethod:
     from .vcd_ext import VCDExtended
     from .mad import MAD
     from .avcd import AVCD
+    from .ours_steer import OursSteer
 
     registry = {
         "base": BaseDecoding,
         "vcd_ext": VCDExtended,
         "mad": MAD,
         "avcd": AVCD,
+        "ours_steer": OursSteer,   # feat/ours-steer — Ours + Language Dom 개선 분기
     }
     if name not in registry:
         raise ValueError(f"알 수 없는 방법: {name!r} (허용: {sorted(registry)})")
     return registry[name]()
 
 
-METHOD_NAMES = ("base", "vcd_ext", "mad", "avcd")
+METHOD_NAMES = ("base", "vcd_ext", "mad", "avcd")          # 비교군 16 run 매트릭스
+ALL_METHODS = METHOD_NAMES + ("ours_steer",)               # 러너 CLI 허용 목록

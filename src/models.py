@@ -157,6 +157,31 @@ class MockAdapter(ModelAdapter):
         p = torch.softmax(z, dim=0).tolist()
         return p[0], p[1], p[2]  # (p_audio, p_video, p_both)
 
+    # ---- Ours 스티어링 (feat/ours-steer) — dry-run용 mock ----
+    HID = 32
+
+    def steer_prepare(self, ctx: dict, layer: int) -> dict:
+        has_v, has_a = ctx["has_video"], ctx["has_audio"]
+        return {"video_idx": list(range(5, 15)) if has_v else [],
+                "audio_idx": list(range(15, 25)) if has_a else [],
+                "text_idx": list(range(25, 30)),
+                "ans": 29, "layer": layer, "seq_len": 30,
+                "sample_id": ctx["sample_id"]}
+
+    def steer_forward(self, ctx: dict, sp: dict, mask_keys=None):
+        tag = "none" if not mask_keys else f"mask{min(mask_keys)}-{max(mask_keys)}"
+        logits = self._logits(sp["sample_id"], f"steer:{tag}", 0)
+        g = self._rng(sp["sample_id"], f"steer_h:{tag}")
+        h = torch.randn(self.HID, generator=g)
+        return logits, h
+
+    def steer_predict(self, ctx: dict, sp: dict, vec: torch.Tensor):
+        g = self._rng(sp["sample_id"], "steer_pred", round(float(vec.norm()), 3))
+        logits = torch.randn(self.VOCAB, generator=g)
+        logits[self.YES] += 2.0
+        logits[self.NO] += 2.0
+        return logits
+
     def avcd_orig_forward(self, ctx: dict, generated_ids: Sequence[int]):
         step = len(generated_ids)
         logits = self._logits(ctx["sample_id"], "avcd:orig", step)
