@@ -64,6 +64,12 @@ class QwenOmniAdapter(ModelAdapter):
         if device_map == "auto":
             gpu_cap = cfg.get("models.qwen2_5_omni_7b.max_memory_gpu", "19GiB")
             load_kwargs["max_memory"] = {0: gpu_cap, "cpu": "64GiB"}
+        elif device_map == "cpu":
+            # 24GB 초과 클립 전용 CPU 폴백(fixCPU) — full-frame AVCD 활성화가 GPU 한계 초과.
+            # flash-attn은 CUDA 전용 → sdpa. CPU는 fp16 미지원 연산이 많음 → fp32
+            # (수식 동일, 부동소수 정밀도만 상향 — 수치 동일성 손실 없음).
+            encoder_impl = "sdpa"
+            dtype = torch.float32
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
             model_path, config=model_cfg, torch_dtype=dtype, device_map=device_map,
             attn_implementation=encoder_impl, **load_kwargs)
