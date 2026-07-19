@@ -13,6 +13,17 @@ source ~/.bashrc
 cd ~/Hallucination
 git pull --ff-only || true
 env_for() { [ "$1" = qwen2_5_omni_7b ] && echo qwen-omni || echo videollama2; }
+echo '[D0] 정성 샘플 패키징 (regenV2 산출물 병합 — CPU만, 오프로드 재시도보다 먼저)'
+for model in videollama2_av qwen2_5_omni_7b; do
+  conda run -n videollama2 --no-capture-output python scripts/package_samples.py \
+    --mining results/runs/mining/avhbench__${model}.csv \
+    --media-dir /home3/t202401082/omni-steering/Dataset/AVH_Bench \
+    --benchmark avhbench --top 15 \
+    --model ${model} --regen-dir results/runs/avhbench \
+    --out results/runs/qualitative/avhbench__${model} \
+    > logs/package_${model}.log 2>&1 || true
+done
+echo '[D0] 패키징 완료 — results/runs/qualitative/'
 echo '[D] 오프로드 재시도 (24GB 초과 클립)'
 for f in results/runs/*/*.jsonl; do
   stem=$(basename "$f" .jsonl)
