@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -440,6 +441,7 @@ def run(args) -> int:
             except Exception as e:
                 n_err += 1
                 logger.error("샘플 실패 %s: %s", sample.sample_id, e)
+                logger.error("traceback:\n%s", traceback.format_exc())
                 record = {
                     "sample_id": sample.sample_id, "video_id": sample.video_id,
                     "benchmark": sample.benchmark, "category": sample.category,
