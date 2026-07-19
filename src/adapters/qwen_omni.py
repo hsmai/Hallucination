@@ -56,9 +56,17 @@ class QwenOmniAdapter(ModelAdapter):
         dtype = torch.bfloat16 if cfg.get("experiment.dtype") == "bfloat16" else torch.float16
         encoder_impl = cfg.get("models.qwen2_5_omni_7b.encoder_attn_implementation",
                                "flash_attention_2")
+        # 4) device_map: 기본 "cuda"(전부 GPU). 24GB 초과 클립 전용 오프로드 모드는
+        #    --set models.qwen2_5_omni_7b.device_map=auto 로만 켠다 (fixD job 전용 —
+        #    max_memory로 GPU 상한을 걸어 초과 레이어를 CPU에 배치, 기본 경로 무영향).
+        device_map = cfg.get("models.qwen2_5_omni_7b.device_map", "cuda")
+        load_kwargs = {}
+        if device_map == "auto":
+            gpu_cap = cfg.get("models.qwen2_5_omni_7b.max_memory_gpu", "19GiB")
+            load_kwargs["max_memory"] = {0: gpu_cap, "cpu": "64GiB"}
         self.model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
-            model_path, config=model_cfg, torch_dtype=dtype, device_map="cuda",
-            attn_implementation=encoder_impl)
+            model_path, config=model_cfg, torch_dtype=dtype, device_map=device_map,
+            attn_implementation=encoder_impl, **load_kwargs)
         self._make_thinker_eager()
         # lm_head 입력을 마지막 위치로 슬라이스 (OURS _lm_head_last_hook 이식):
         # 전 위치 logits [1,N,152k]가 N~10k에서 ~3GB → OOM 원인. 우리는 항상 [0,-1]만 읽으므로 무손실.
