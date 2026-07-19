@@ -119,12 +119,18 @@ def mask_attention_rows(
     span_mask: torch.Tensor,     # (S,) bool — 마스킹 대상 modality 합집합
     threshold: float,
     renorm_eps: float = 1e-6,
+    inplace: bool = False,
 ) -> torch.Tensor:
     """AVCD attentive masking (공식 코드 L732–779 재현).
 
     span에 속한 위치 p의 "query 행" attn[h, p, :]를, 마지막 query가 p를 보는 강도
     attn[h, -1, p]가 threshold를 초과하는 (h, p)에 대해 통째로 0으로 만들고 행 재정규화.
     (전부 0이 된 행은 clamp에 의해 0으로 유지 → 해당 토큰의 attention 출력 제거)
+
+    inplace=True: attn을 제자리에서 수정해 반환 (수식 동일 — 복사본 3개 제거).
+    시퀀스 ~20k에서 (H,L,S) fp32 복사본 하나가 ~1.5GiB라 OOM의 직접 원인이었음
+    (2026-07-20 diagOOM traceback: masked/denom 할당 실패). 호출자는 폐기 가능한
+    복사본을 넘겨야 한다 (attn_patch는 .to(float32) 신규 텐서를 전달).
     """
     if attn.dim() != 3:
         raise ValueError(f"attn은 (H, L, S)여야 합니다: {tuple(attn.shape)}")
@@ -137,11 +143,15 @@ def mask_attention_rows(
 
     last_query = attn[:, -1, :]                       # (H, S)
     keep = (last_query <= threshold)                  # True=유지, False=제거 대상
-    row_mask = torch.ones_like(attn)
-    # span 위치의 query 행에 keep 여부 브로드캐스트 (공식 코드의 modality_mask[:, span, :] = av_mask)
     span_idx = torch.nonzero(span_mask).squeeze(-1)
-    row_mask[:, span_idx, :] = keep[:, span_idx].unsqueeze(-1).to(attn.dtype)
 
-    masked = attn * row_mask
-    denom = masked.sum(dim=-1, keepdim=True).clamp(min=renorm_eps)
-    return masked / denom
+    if not inplace:
+        attn = attn.clone()
+    # 행 스케일 (H, L, 1): span 밖 1, span 행은 keep — 원본 row_mask(ones + span행 keep)와
+    # 동일한 곱을 (H,L,S) 전체 마스크 없이 브로드캐스트로 수행 (S축 생략 → ~S배 메모리 절감)
+    row_scale = torch.ones(H, L, 1, dtype=attn.dtype, device=attn.device)
+    row_scale[:, span_idx, 0] = keep[:, span_idx].to(attn.dtype)
+    attn.mul_(row_scale)
+    denom = attn.sum(dim=-1, keepdim=True).clamp_(min=renorm_eps)
+    attn.div_(denom)
+    return attn

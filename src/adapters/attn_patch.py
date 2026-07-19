@@ -117,9 +117,12 @@ def _avcd_inject(self_attn, attn_weights: torch.Tensor, q_len: int) -> torch.Ten
                 f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
                 f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
         dtype = attn_weights.dtype
+        # 메모리: fp32 복사 1개만 유지 — 원본은 즉시 해제, 마스킹은 in-place (수식 동일)
+        aw_f32 = attn_weights[0].to(torch.float32)
+        span = CTX.span_mask.to(attn_weights.device)
+        del attn_weights
         attn_weights = mask_attention_rows(
-            attn_weights[0].to(torch.float32),
-            CTX.span_mask.to(attn_weights.device), CTX.threshold,
+            aw_f32, span, CTX.threshold, inplace=True,
         ).unsqueeze(0).to(dtype)
     return attn_weights
 
@@ -192,10 +195,14 @@ def _legacy_forward_factory(m):
                         raise RuntimeError(
                             f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
                             f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
+                    # 메모리: fp32 복사 1개만 유지 — 원본 aw 즉시 해제, in-place 마스킹 (수식 동일)
+                    aw_f32 = aw[0].to(torch.float32)
+                    span = CTX.span_mask.to(aw_f32.device)
+                    del aw
                     aw = mask_attention_rows(
-                        aw[0].to(torch.float32),
-                        CTX.span_mask.to(aw.device), CTX.threshold,
+                        aw_f32, span, CTX.threshold, inplace=True,
                     ).unsqueeze(0).to(q.dtype)
+                    del aw_f32
             # ============================================
 
             aw = nn.functional.dropout(aw, p=self.attention_dropout, training=self.training)
