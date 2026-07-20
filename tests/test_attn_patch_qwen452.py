@@ -92,3 +92,40 @@ class TestLegacyPatch:
         finally:
             CTX.enabled, CTX.recording, CTX.span_mask = False, False, None
             type(attn).forward = orig_forward
+
+
+class TestLegacyQBlock:
+    def test_qblock_equals_nonqblock(self, attn_and_inputs):
+        """q-block 경로(초장문용)가 비블록 경로와 출력·기록 모두 동일한지 (서버 env)."""
+        attn, inputs = attn_and_inputs
+        orig_forward = type(attn).forward
+        type(attn).forward = _legacy_forward_factory(m)
+        CTX.layer_module_ids = frozenset([id(attn)])
+        CTX.num_layers = 2
+        saved = (CTX.qblock_seq_threshold, CTX.q_block)
+        span = torch.zeros(S, dtype=torch.bool); span[3:10] = True
+        try:
+            for mode in ("record", "mask"):
+                CTX.enabled = True
+                CTX.recording = (mode == "record")
+                CTX.span_mask = span if mode == "mask" else None
+                CTX.threshold = 0.02 if mode == "mask" else 0.0
+
+                CTX.qblock_seq_threshold, CTX.q_block = 10 ** 9, 4096  # 비블록
+                CTX.reset_records()
+                ref = run(attn, inputs)
+                ref_rows = CTX.records_in_order()
+
+                CTX.qblock_seq_threshold, CTX.q_block = 8, 7          # 블록 (비약수)
+                CTX.reset_records()
+                got = run(attn, inputs)
+                got_rows = CTX.records_in_order()
+
+                assert torch.allclose(got, ref, atol=1e-5), f"{mode}: 출력 불일치"
+                assert len(ref_rows) == len(got_rows)
+                for a, b in zip(ref_rows, got_rows):
+                    assert torch.allclose(a, b, atol=1e-6), f"{mode}: 기록 행 불일치"
+        finally:
+            CTX.qblock_seq_threshold, CTX.q_block = saved
+            CTX.enabled, CTX.recording, CTX.span_mask = False, False, None
+            type(attn).forward = orig_forward

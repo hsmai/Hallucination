@@ -199,3 +199,25 @@ class TestMaskRows:
             out_ip = mask_attention_rows(buf, span, thr, inplace=True)
             assert torch.allclose(out_ip, ref, atol=1e-6)
             assert out_ip.data_ptr() == buf.data_ptr(), "inplace=True인데 새 텐서 반환"
+
+    def test_qblock_mode_equals_full(self, spans):
+        """q-block 모드(keep 사전계산 + row_offset 블록 처리)가 전체 처리와 동일한지.
+
+        2026-07-20 초장문 OOM 대응: attn_patch가 초장문 prefill에서 행 블록으로
+        나눠 호출하는 경로의 수치 동등성을 함수 레벨에서 검증한다.
+        """
+        span = spans["video"]
+        attn = softmax_rows(torch.randn(H, S, S))
+        thr = float(attn[:, -1, :].median())
+        full = mask_attention_rows(attn, span, thr)
+
+        keep = (attn[:, -1, :] <= thr)
+        for block in (5, 7, S):   # 비약수 블록 크기 포함
+            parts = []
+            for r0 in range(0, S, block):
+                r1 = min(r0 + block, S)
+                parts.append(mask_attention_rows(
+                    attn[:, r0:r1, :].clone(), span, thr,
+                    inplace=True, keep=keep, row_offset=r0))
+            got = torch.cat(parts, dim=1)
+            assert torch.allclose(got, full, atol=1e-6), f"block={block} 불일치"

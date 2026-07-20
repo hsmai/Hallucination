@@ -120,6 +120,8 @@ def mask_attention_rows(
     threshold: float,
     renorm_eps: float = 1e-6,
     inplace: bool = False,
+    keep: torch.Tensor | None = None,   # (H, S) bool — 사전계산된 유지 마스크 (q-block 모드)
+    row_offset: int = 0,                # attn이 전체 행렬의 [row_offset:row_offset+L) 행 블록일 때
 ) -> torch.Tensor:
     """AVCD attentive masking (공식 코드 L732–779 재현).
 
@@ -135,22 +137,29 @@ def mask_attention_rows(
     if attn.dim() != 3:
         raise ValueError(f"attn은 (H, L, S)여야 합니다: {tuple(attn.shape)}")
     H, L, S = attn.shape
-    if L != S:
-        # 마스킹은 prefill(전체 시퀀스 forward)에서만 적용 (공식 코드: size(2)!=1 조건)
-        raise ValueError("row masking은 L==S(prefill)에서만 정의됨")
     if span_mask.shape != (S,):
         raise ValueError("span_mask shape 불일치")
+    if keep is None:
+        if L != S:
+            # 마스킹은 prefill(전체 시퀀스 forward)에서만 적용 (공식 코드: size(2)!=1 조건)
+            raise ValueError("row masking은 L==S(prefill)에서만 정의됨 (블록 모드는 keep 필수)")
+        last_query = attn[:, -1, :]                   # (H, S)
+        keep = (last_query <= threshold)              # True=유지, False=제거 대상
+    elif keep.shape != (H, S):
+        raise ValueError(f"keep shape 불일치: {tuple(keep.shape)} != ({H},{S})")
+    if row_offset < 0 or row_offset + L > S:
+        raise ValueError(f"row_offset 범위 밖: {row_offset}+{L} > {S}")
 
-    last_query = attn[:, -1, :]                       # (H, S)
-    keep = (last_query <= threshold)                  # True=유지, False=제거 대상
-    span_idx = torch.nonzero(span_mask).squeeze(-1)
+    # 이 블록에 속한 span 행 (전역 인덱스 [row_offset, row_offset+L) 교집합)
+    span_idx_local = torch.nonzero(span_mask[row_offset:row_offset + L]).squeeze(-1)
 
     if not inplace:
         attn = attn.clone()
     # 행 스케일 (H, L, 1): span 밖 1, span 행은 keep — 원본 row_mask(ones + span행 keep)와
     # 동일한 곱을 (H,L,S) 전체 마스크 없이 브로드캐스트로 수행 (S축 생략 → ~S배 메모리 절감)
     row_scale = torch.ones(H, L, 1, dtype=attn.dtype, device=attn.device)
-    row_scale[:, span_idx, 0] = keep[:, span_idx].to(attn.dtype)
+    if span_idx_local.numel():
+        row_scale[:, span_idx_local, 0] = keep[:, span_idx_local + row_offset].to(attn.dtype)
     attn.mul_(row_scale)
     denom = attn.sum(dim=-1, keepdim=True).clamp_(min=renorm_eps)
     attn.div_(denom)

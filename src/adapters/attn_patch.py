@@ -40,6 +40,10 @@ class AVCDPatchContext:
     # 2026-07-17 게이트: chunk=4로도 CMM 최장 클립 OOM(19/200) → 1로 하향 (피크 ~1.2GB)
     chunk_seq_threshold: int = 4096
     head_chunk: int = 1
+    # q-block: 초장문 prefill에서 head_chunk=1로도 [1,L,S] fp32(softmax)가 3GB+ →
+    # query 행 블록으로 분할 (행 단위 연산이라 수치 동일; 2026-07-20 wSalQi 진단)
+    qblock_seq_threshold: int = 16384
+    q_block: int = 4096
 
     def reset_records(self):
         self.recorded = {}
@@ -175,39 +179,88 @@ def _legacy_forward_factory(m):
         layer_idx = getattr(self, "layer_idx", None)
         rec_rows = []
         outs = []
+        use_qblock = (q_len > CTX.qblock_seq_threshold and q_len == S)
         for h0 in range(0, n_heads, chunk):
             q = query_states[:, h0:h0 + chunk]
             k = key_states[:, h0:h0 + chunk]
             v = value_states[:, h0:h0 + chunk]
-            aw = torch.matmul(q, k.transpose(2, 3)) * scale
-            if causal_mask is not None:
-                aw = aw + causal_mask                      # (1,1,L,S) 브로드캐스트
-            if q.dtype == torch.float16:
-                aw = torch.where(torch.isinf(aw), torch.zeros_like(aw), aw)
-            aw = nn.functional.softmax(aw, dim=-1, dtype=torch.float32).to(q.dtype)
 
-            # ==== AVCD 삽입점 (원본과의 유일한 차이) ====
-            if do_inject and q_len > 1 and layer_idx is not None:
-                if CTX.recording:
-                    rec_rows.append(aw[0, :, -1, :].detach().to(torch.float32).cpu())
-                if CTX.span_mask is not None and layer_idx < CTX.num_layers - 1:
-                    if CTX.span_mask.shape[0] != S:
-                        raise RuntimeError(
-                            f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
-                            f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
-                    # 메모리: fp32 복사 1개만 유지 — 원본 aw 즉시 해제, in-place 마스킹 (수식 동일)
-                    aw_f32 = aw[0].to(torch.float32)
-                    span = CTX.span_mask.to(aw_f32.device)
-                    del aw
-                    aw = mask_attention_rows(
-                        aw_f32, span, CTX.threshold, inplace=True,
-                    ).unsqueeze(0).to(q.dtype)
-                    del aw_f32
-            # ============================================
+            want_inject = do_inject and q_len > 1 and layer_idx is not None
+            want_mask = (want_inject and CTX.span_mask is not None
+                         and layer_idx < CTX.num_layers - 1)
+            if want_mask and CTX.span_mask.shape[0] != S:
+                raise RuntimeError(
+                    f"AVCD span_mask 길이({CTX.span_mask.shape[0]}) != attention S({S}) — "
+                    f"span 계산이 실제 시퀀스와 어긋남 (runbook T3)")
 
-            aw = nn.functional.dropout(aw, p=self.attention_dropout, training=self.training)
-            outs.append(torch.matmul(aw, v))
-            del aw
+            if not use_qblock:
+                aw = torch.matmul(q, k.transpose(2, 3)) * scale
+                if causal_mask is not None:
+                    aw = aw + causal_mask                  # (1,1,L,S) 브로드캐스트
+                if q.dtype == torch.float16:
+                    aw = torch.where(torch.isinf(aw), torch.zeros_like(aw), aw)
+                aw = nn.functional.softmax(aw, dim=-1, dtype=torch.float32).to(q.dtype)
+
+                # ==== AVCD 삽입점 (원본과의 유일한 차이) ====
+                if want_inject:
+                    if CTX.recording:
+                        rec_rows.append(aw[0, :, -1, :].detach().to(torch.float32).cpu())
+                    if want_mask:
+                        # 메모리: fp32 복사 1개만 유지 — 원본 aw 즉시 해제, in-place 마스킹 (수식 동일)
+                        aw_f32 = aw[0].to(torch.float32)
+                        span = CTX.span_mask.to(aw_f32.device)
+                        del aw
+                        aw = mask_attention_rows(
+                            aw_f32, span, CTX.threshold, inplace=True,
+                        ).unsqueeze(0).to(q.dtype)
+                        del aw_f32
+                # ============================================
+
+                aw = nn.functional.dropout(aw, p=self.attention_dropout, training=self.training)
+                outs.append(torch.matmul(aw, v))
+                del aw
+            else:
+                # ---- q-block 경로 (초장문 prefill 전용, 수치 동일) ----
+                # softmax/마스킹/재정규화/AV(=aw@v)는 전부 query 행 단위 연산이라
+                # 행 블록 분할이 결과를 바꾸지 않는다. keep(마스킹 기준)은 마지막
+                # query 행에만 의존하므로 그 행을 먼저 계산해 공유한다.
+                def _rows(r0, r1):
+                    ab = torch.matmul(q[:, :, r0:r1], k.transpose(2, 3)) * scale
+                    if causal_mask is not None:
+                        ab = ab + causal_mask[..., r0:r1, :]
+                    if q.dtype == torch.float16:
+                        ab = torch.where(torch.isinf(ab), torch.zeros_like(ab), ab)
+                    return nn.functional.softmax(ab, dim=-1, dtype=torch.float32).to(q.dtype)
+
+                keep = None
+                if want_inject:
+                    last_bf = _rows(q_len - 1, q_len)          # (1,c,1,S) — 비블록 경로와
+                    last_f32 = last_bf[0, :, -1, :].detach().to(torch.float32)  # 동일 반올림
+                    if CTX.recording:
+                        rec_rows.append(last_f32.cpu())
+                    if want_mask:
+                        keep = (last_f32 <= CTX.threshold)     # mask_attention_rows와 동일 정의
+                    del last_bf
+                span = CTX.span_mask.to(q.device) if want_mask else None
+
+                out_blocks = []
+                for r0 in range(0, q_len, CTX.q_block):
+                    r1 = min(r0 + CTX.q_block, q_len)
+                    ab = _rows(r0, r1)
+                    if want_mask:
+                        ab_f32 = ab[0].to(torch.float32)
+                        del ab
+                        ab = mask_attention_rows(
+                            ab_f32, span, CTX.threshold, inplace=True,
+                            keep=keep, row_offset=r0,
+                        ).unsqueeze(0).to(q.dtype)
+                        del ab_f32
+                    ab = nn.functional.dropout(ab, p=self.attention_dropout,
+                                               training=self.training)
+                    out_blocks.append(torch.matmul(ab, v))
+                    del ab
+                outs.append(torch.cat(out_blocks, dim=2))
+                del out_blocks
         attn_output = torch.cat(outs, dim=1)
         if do_inject and CTX.recording and rec_rows and layer_idx is not None:
             CTX.recorded[layer_idx] = torch.cat(rec_rows, dim=0)   # (H, S)
