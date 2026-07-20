@@ -77,6 +77,8 @@ benchmarks:
     blocklist: data/qa/cmm_blocklist.txt       # 확정 — 디코더 hang 유발 손상 mp4 8건 (OURS와 동일)
     fixed_dir: _fixed                          # {cmm_media_dir}/_fixed/{id}.mp4 재인코딩본으로 교체
     load_timeout_s: 60                         # OURS와 동일한 비디오 로드 타임아웃 가드
+    trap_emulation: false                      # 검증 전용 — MAD repo식 CMM 입력(wav 무시, 무음 mp4 트랙) 재현.
+                                               #   VL2 VCD/MAD CMM 논문 수치 격차의 원인 실증 run에서만 --set으로 켠다
 
 prompts:
   # 확정 (2026-07-16) — 모델별로 다름! OURS가 "각 모델 자체 eval 프롬프트에 맞춤(baseline comparability)"

@@ -149,6 +149,10 @@ def load_cmm(cfg: Config) -> list[Sample]:
     if bl_path and Path(bl_path).exists():
         blocklist = {l.strip() for l in Path(bl_path).read_text().splitlines() if l.strip()}
     fixed_dir = cfg.get("benchmarks.cmm.fixed_dir", "_fixed")
+    trap_emulation = bool(cfg.get("benchmarks.cmm.trap_emulation", False))
+    if trap_emulation:
+        logger.warning("CMM 함정 에뮬레이션 모드 — MAD repo식 입력(별도 wav 무시, 무음 mp4 트랙 사용). "
+                       "검증 전용이며 본 결과에 사용 금지.")
 
     samples = []
     for x in raw:
@@ -162,6 +166,11 @@ def load_cmm(cfg: Config) -> list[Sample]:
         stem = os.path.splitext(os.path.basename(anchor))[0]
         if vpath and stem in blocklist:
             vpath = f"{fixed_dir}/{stem}.mp4"      # 재인코딩본으로 교체
+        # 함정 에뮬레이션 (검증 전용, 기본 false): MAD repo의 CMM 입력 방식 재현 —
+        # 별도 wav를 버리고 mp4의 (무음) 오디오 트랙을 audio branch에 공급.
+        # VL2 VCD/MAD CMM 셀이 MAD 논문 수치와 다른 원인(무음 mp4 함정)의 실증 실험용.
+        if trap_emulation and vpath:
+            apath = None
         samples.append(Sample(
             sample_id=f"{stem}::{x['question']}",
             video_id=stem,
@@ -176,6 +185,8 @@ def load_cmm(cfg: Config) -> list[Sample]:
                 "modality": x.get("modality"),
                 "granularity": x.get("granularity"),
                 "correlation_type": x.get("correlation_type"),
+                # 함정 모드: mp4를 오디오 소스로 취급 (VL2 va=True / Qwen uaiv 경로)
+                "audio_in_video": bool(trap_emulation and vpath),
             },
         ))
     return _finalize(cfg, samples, "CMM")
