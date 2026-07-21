@@ -46,6 +46,8 @@ models:
                                                     # + thinker text만 eager 스왑 (전 방법 동일, AVCD 패치 대상)
                                                     # talker는 enable_audio_output=False로 아예 미생성 (24GB 대응)
     use_audio_in_video: true                  # AVHBench: mp4에 오디오 먹싱됨(muxed). CMM은 별도 wav→separate
+    device_map: cuda                          # 기본 전부 GPU. "auto"=24GB 초과 클립용 CPU 오프로드 (fixD 전용 --set)
+    max_memory_gpu: 19GiB                     # device_map=auto일 때 GPU 상한 (활성화 피크 ~5GB 여유 확보)
 
 paths:
   # 확정 (2026-07-16) — 선배 안내: omni-steering 내부 데이터셋을 경로 맞춰 사용
@@ -75,6 +77,8 @@ benchmarks:
     blocklist: data/qa/cmm_blocklist.txt       # 확정 — 디코더 hang 유발 손상 mp4 8건 (OURS와 동일)
     fixed_dir: _fixed                          # {cmm_media_dir}/_fixed/{id}.mp4 재인코딩본으로 교체
     load_timeout_s: 60                         # OURS와 동일한 비디오 로드 타임아웃 가드
+    trap_emulation: false                      # 검증 전용 — MAD repo식 CMM 입력(wav 무시, 무음 mp4 트랙) 재현.
+                                               #   VL2 VCD/MAD CMM 논문 수치 격차의 원인 실증 run에서만 --set으로 켠다
 
 prompts:
   # 확정 (2026-07-16) — 모델별로 다름! OURS가 "각 모델 자체 eval 프롬프트에 맞춤(baseline comparability)"

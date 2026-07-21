@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -399,6 +400,16 @@ def run(args) -> int:
     method = get_method(args.method)
     method.setup(adapter, cfg, args.benchmark)
 
+    if args.use_probe_question:
+        # 정성 샘플 서술형 재생성(regenV3): 질문을 monitoring.probe_prompt로 치환하고
+        # suffix를 비운다 — RunMonitor._run_probe와 동일 방식 (MAD Fig.9-10 스타일).
+        probe_q = cfg.get("monitoring.probe_prompt")
+        if not probe_q:
+            raise ValueError("--use-probe-question: monitoring.probe_prompt가 비어 있음")
+        method.prompt_suffix = ""
+        todo = [dataclasses.replace(s, question=probe_q) for s in todo]
+        logger.info("--use-probe-question: 질문을 probe_prompt로 치환 (%d샘플)", len(todo))
+
     monitor = RunMonitor(cfg, args, n_todo=len(todo), jsonl_path=jsonl_path)
     monitor.seed_from_records(prev_records)   # 재개 시 누적 지표가 전체 기준이 되도록
 
@@ -430,6 +441,7 @@ def run(args) -> int:
             except Exception as e:
                 n_err += 1
                 logger.error("샘플 실패 %s: %s", sample.sample_id, e)
+                logger.error("traceback:\n%s", traceback.format_exc())
                 record = {
                     "sample_id": sample.sample_id, "video_id": sample.video_id,
                     "benchmark": sample.benchmark, "category": sample.category,
@@ -462,6 +474,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ids-file", default=None, help="sample_id 목록 파일 — 해당 샘플만 실행 (D3 재생성)")
     p.add_argument("--max-new-tokens", type=int, default=0, help="디코딩 길이 오버라이드 (D3 서술형 재생성)")
     p.add_argument("--out-tag", default="", help="출력 파일 구분 태그 — 재생성 실행 시 본 결과와 분리 (예: regen256)")
+    p.add_argument("--use-probe-question", action="store_true",
+                   help="질문을 monitoring.probe_prompt로 치환 + suffix 제거 (서술형 재생성 — regenV3)")
     p.add_argument("--set", action="append", default=[],
                    help="설정 오버라이드 dotted.key=value (반복 가능) — 게이트 α그리드/β판정/경로분리용")
     p.add_argument("--retry-errors", action="store_true",

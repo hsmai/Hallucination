@@ -1,0 +1,10 @@
+00092::Is the fabric making sound in the audio?
+00096::Is the wooden toys on table making sound in the audio?
+00127::Is the bowl making sound in the audio?
+00127::Is the cotton candy making sound in the audio?
+00131::Is the fabric making sound in the audio?
+00131::Is the table making sound in the audio?
+00147::Is the stage making sound in the audio?
+00159::Is the cage making sound in the audio?
+00180::Is the airplane wing making sound in the audio?
+00219::Is the wheel making sound in the audio?

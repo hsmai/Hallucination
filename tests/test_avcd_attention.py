@@ -165,3 +165,59 @@ class TestMaskRows:
         out0 = mask_attention_rows(attn, span, threshold=0.0)
         span_idx = torch.nonzero(span).squeeze(-1)
         assert torch.all(out0[:, span_idx, :] == 0)
+
+    def test_inplace_equivalence_and_purity(self, spans):
+        """2026-07-20 OOM 교정(행-스케일 in-place)이 구현 전 수식과 완전 동일함을 검증.
+
+        - 참조 구현: 교정 전 코드 그대로 (ones_like row_mask → masked/denom)
+        - inplace=False(기본)는 입력을 변경하지 않아야 함 (기존 계약 유지)
+        - inplace=True는 결과 동일 + 입력 텐서를 제자리 수정
+        """
+        def reference(attn, span_mask, threshold, eps=1e-6):
+            last_query = attn[:, -1, :]
+            keep = (last_query <= threshold)
+            row_mask = torch.ones_like(attn)
+            span_idx = torch.nonzero(span_mask).squeeze(-1)
+            row_mask[:, span_idx, :] = keep[:, span_idx].unsqueeze(-1).to(attn.dtype)
+            masked = attn * row_mask
+            denom = masked.sum(dim=-1, keepdim=True).clamp(min=eps)
+            return masked / denom
+
+        for span_key in ("audio", "video"):
+            span = spans[span_key]
+            attn = softmax_rows(torch.randn(H, S, S))
+            # threshold를 중앙값 근처로 잡아 실제로 절반쯤 제거되는 경로를 태운다
+            thr = float(attn[:, -1, :].median())
+            ref = reference(attn.clone(), span, thr)
+
+            orig = attn.clone()
+            out = mask_attention_rows(attn, span, thr)            # 기본: 비파괴
+            assert torch.allclose(out, ref, atol=1e-6)
+            assert torch.equal(attn, orig), "inplace=False가 입력을 변경함"
+
+            buf = attn.clone()
+            out_ip = mask_attention_rows(buf, span, thr, inplace=True)
+            assert torch.allclose(out_ip, ref, atol=1e-6)
+            assert out_ip.data_ptr() == buf.data_ptr(), "inplace=True인데 새 텐서 반환"
+
+    def test_qblock_mode_equals_full(self, spans):
+        """q-block 모드(keep 사전계산 + row_offset 블록 처리)가 전체 처리와 동일한지.
+
+        2026-07-20 초장문 OOM 대응: attn_patch가 초장문 prefill에서 행 블록으로
+        나눠 호출하는 경로의 수치 동등성을 함수 레벨에서 검증한다.
+        """
+        span = spans["video"]
+        attn = softmax_rows(torch.randn(H, S, S))
+        thr = float(attn[:, -1, :].median())
+        full = mask_attention_rows(attn, span, thr)
+
+        keep = (attn[:, -1, :] <= thr)
+        for block in (5, 7, S):   # 비약수 블록 크기 포함
+            parts = []
+            for r0 in range(0, S, block):
+                r1 = min(r0 + block, S)
+                parts.append(mask_attention_rows(
+                    attn[:, r0:r1, :].clone(), span, thr,
+                    inplace=True, keep=keep, row_offset=r0))
+            got = torch.cat(parts, dim=1)
+            assert torch.allclose(got, full, atol=1e-6), f"block={block} 불일치"
