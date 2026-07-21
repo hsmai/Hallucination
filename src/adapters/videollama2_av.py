@@ -139,9 +139,16 @@ class VideoLLaMA2Adapter(ModelAdapter):
 
         tensors = {"va": None, "v": None, "a": None, "t": None}
         audio_in_video = bool(sample.extra.get("audio_in_video", False))
+        paper_recipe = bool(self.cfg.get("benchmarks.cmm.vl2_paper_recipe", False))
         if sample.video_path:
             tensors["v"] = self.processor["video"](sample.video_path, va=False)
-            if sample.audio_path:                       # CMM AV: 별도 wav
+            if sample.audio_path and paper_recipe:
+                # 논문 레시피 재현 모드 (검증 전용, 기본 off) — MAD repo eval_batch_cmm_mad.py
+                # L103-106 그대로: VA = 무음 mp4 va=True(제로 오디오), A = processor['audio'](wav)
+                # (연속 30s 오디오 프로세서). VL2 VCD/MAD CMM 논문값 복원 실험용.
+                tensors["va"] = self.processor["video"](sample.video_path, va=True)
+                tensors["a"] = self.processor["audio"](sample.audio_path)
+            elif sample.audio_path:                     # CMM AV: 별도 wav (Ours 규약)
                 audio_t = process_audio_from_video(sample.audio_path, 0)
                 tensors["va"] = {"video": tensors["v"], "audio": audio_t}
                 tensors["a"] = audio_t

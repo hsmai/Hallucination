@@ -79,6 +79,9 @@ benchmarks:
     load_timeout_s: 60                         # OURS와 동일한 비디오 로드 타임아웃 가드
     trap_emulation: false                      # 검증 전용 — MAD repo식 CMM 입력(wav 무시, 무음 mp4 트랙) 재현.
                                                #   VL2 VCD/MAD CMM 논문 수치 격차의 원인 실증 run에서만 --set으로 켠다
+    vl2_paper_recipe: false                    # 검증 전용 — MAD repo eval_batch_cmm_mad.py의 CMM 레시피 재현:
+                                               #   VA=무음mp4 va=True(제로 오디오), A=processor['audio'](wav, 연속30s).
+                                               #   프롬프트도 함께: --set prompts.cmm_suffix.videollama2_av 사용
 
 prompts:
   # 확정 (2026-07-16) — 모델별로 다름! OURS가 "각 모델 자체 eval 프롬프트에 맞춤(baseline comparability)"
