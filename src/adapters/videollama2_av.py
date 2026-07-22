@@ -146,7 +146,13 @@ class VideoLLaMA2Adapter(ModelAdapter):
                 # 논문 레시피 재현 모드 (검증 전용, 기본 off) — MAD repo eval_batch_cmm_mad.py
                 # L103-106 그대로: VA = 무음 mp4 va=True(제로 오디오), A = processor['audio'](wav)
                 # (연속 30s 오디오 프로세서). VL2 VCD/MAD CMM 논문값 복원 실험용.
-                tensors["va"] = self.processor["video"](sample.video_path, va=True)
+                # vl2_recipe_va="real"이면 VA에도 실제 wav 결합 (전 모달리티 공급 변형 —
+                # 2026-07-22 사용자 지시 "전체 모달리티가 다 들어가야 함" 검증용).
+                if str(self.cfg.get("benchmarks.cmm.vl2_recipe_va", "silent")) == "real":
+                    audio_t = process_audio_from_video(sample.audio_path, 0)
+                    tensors["va"] = {"video": tensors["v"], "audio": audio_t}
+                else:
+                    tensors["va"] = self.processor["video"](sample.video_path, va=True)
                 tensors["a"] = self.processor["audio"](sample.audio_path)
             elif sample.audio_path:                     # CMM AV: 별도 wav (Ours 규약)
                 audio_t = process_audio_from_video(sample.audio_path, 0)
