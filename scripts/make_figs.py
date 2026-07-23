@@ -22,6 +22,12 @@ def hl(text, spans=()):
         t = t.replace(html.escape(sub), f'<span class="{cls}">{html.escape(sub)}</span>')
     return t
 
+# ── Ours 슬롯 (선배님이 직접 채우는 자리) ──
+OURS_SLOT = ('<span class="slot">[ Ours 출력을 여기에 붙여넣으세요 — '
+             '환각 없이 올바른 서술이면 핵심 구절을 &lt;span class="blue"&gt;…&lt;/span&gt;로 감싸세요 ]</span>')
+OURS_SLOT_YN = ('<span class="slot">[ Ours의 Yes/No — 정답이면 '
+                '&lt;span class="blue"&gt;No&lt;/span&gt; 형태로 ]</span>')
+
 # ── figure 정의 ──
 FIGS = {
 "fig9_videollama2": {
@@ -38,6 +44,7 @@ FIGS = {
        ("AVCD", hl("A yellow screen with black words stating 'african symbol sound 3186 live and direct damali beach moddy jama' is shown.",
                    [("A yellow screen with black words", "blue")])),
        ("MAD", hl("A man singing into a microphone.", [("singing", "red")])),
+       ("Ours", OURS_SLOT),
      ]},
     {"vid": "00103",
      "video": "A person dries a black-and-white baby goat with a white towel.",
@@ -49,6 +56,7 @@ FIGS = {
        ("Base", hl("Yes", [("Yes", "red")])),
        ("AVCD", hl("Yes", [("Yes", "red")])),
        ("MAD", hl("Yes", [("Yes", "red")])),
+       ("Ours", OURS_SLOT_YN),
      ]},
   ]},
 "fig10_qwen": {
@@ -66,6 +74,7 @@ FIGS = {
                    [("you hear the sewing machine whirring and clicking", "blue")])),
        ("MAD", hl("Well, it seems like you're describing a sewing machine in action. You can hear the rhythmic sound of the needle going up and down, and the fabric being fed through. There's also the sound of the motor running.",
                   [("the fabric being fed through", "red")])),
+       ("Ours", OURS_SLOT),
      ]},
     {"vid": "00127",
      "video": "A hand handles a large ball of pink cotton candy in a metal bowl.",
@@ -77,6 +86,7 @@ FIGS = {
        ("Base", hl("Yes", [("Yes", "red")])),
        ("AVCD", hl("Yes", [("Yes", "red")])),
        ("MAD", hl("Yes", [("Yes", "red")])),
+       ("Ours", OURS_SLOT_YN),
      ]},
   ]},
 }
@@ -99,11 +109,24 @@ body { font-family: 'Times New Roman', Times, serif; background:#fff; color:#111
 .blue { color:#1560d0; }
 .blk { margin-bottom:20px; }
 .cap { text-align:center; font-size:16px; margin-top:14px; }
+.slot { color:#9a6b00; background:#fff8e6; padding:2px 6px; border-radius:4px;
+        border:1px dashed #d9a441; font-size:14px; }
+.ans.ours { background:#eef4ff; border-color:#4a6fb5; border-width:1.5px; }
+.editnote { font-family:-apple-system,sans-serif; font-size:12.5px; color:#555;
+            background:#f5f7fa; border-left:3px solid #4a6fb5; padding:9px 13px;
+            margin-bottom:14px; line-height:1.5; }
 </style>
 """
 
-def render(fig):
-    parts = [CSS]
+EDITNOTE = ("<div class=\"editnote\"><b>편집 안내</b> — 이 파일은 텍스트 에디터로 바로 수정할 수 있습니다. "
+            "노란 <span class=\"slot\">[ … ]</span> 자리에 Ours 출력을 붙여넣으면 됩니다. "
+            "강조는 <code>&lt;span class=\"red\"&gt;환각 구절&lt;/span&gt;</code> / "
+            "<code>&lt;span class=\"blue\"&gt;올바른 구절&lt;/span&gt;</code>. "
+            "브라우저로 열어 확인 후 인쇄(PDF)하거나 캡처해 논문에 넣으시면 됩니다. "
+            "(이 안내 문단은 최종본에서 지우세요)</div>")
+
+def render(fig, editable=True):
+    parts = [CSS] + ([EDITNOTE] if editable else [])
     for b in fig["blocks"]:
         imgs = "".join(f'<img src="data:image/jpeg;base64,{d}">' for d in frames_b64(b["vid"]))
         parts.append(f'<div class="blk"><div class="frames">{imgs}</div>')
@@ -113,7 +136,8 @@ def render(fig):
                      f'<div><b>Question</b>: {html.escape(b["question"])}</div></div>')
         for j, (m, t) in enumerate(b["methods"]):
             tag = f'<div class="tag">{html.escape(b["tag"])}</div>' if j == 0 else ""
-            parts.append(f'<div class="box ans">{tag}<div class="m">{m}</div><div class="t">{t}</div></div>')
+            cls = "box ans ours" if m == "Ours" else "box ans"
+            parts.append(f'<div class="{cls}">{tag}<div class="m">{m}</div><div class="t">{t}</div></div>')
         parts.append('</div>')
     parts.append(f'<div class="cap">{html.escape(fig["caption"])}</div>')
     return "\n".join(parts)
